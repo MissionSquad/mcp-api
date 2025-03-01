@@ -1,0 +1,62 @@
+{
+  "name": "@missionsquad/mcp-api",
+  "version": "1.0.0",
+  "description": "MCP Servers exposed via HTTP API",
+  "main": "lib/index.js",
+  "repository": "missionsquad/mcp-api",
+  "bugs": "https://github.com/missionsquad/mcp-api/issues",
+  "homepage": "https://github.com/missionsquad/mcp-api",
+  "private": true,
+  "scripts": {
+    "start": "node --experimental-require-module lib/index.js",
+    "build": "rm -rf lib && tsc",
+    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "test": "ts-node-dev src/test.ts"
+  },
+  "keywords": [
+    "node",
+    "typescript",
+    "proxy",
+    "llm",
+    "openai",
+    "ai",
+    "mcp"
+  ],
+  "author": "Jayson Jacobs",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@cyanheads/toolkit-mcp-server": "^1.0.1",
+    "@missionsquad/mcp-ethereum": "^1.0.10",
+    "@missionsquad/mcp-github": "^0.6.2",
+    "@modelcontextprotocol/sdk": "^1.5.0",
+    "@modelcontextprotocol/server-gdrive": "^2025.1.14",
+    "@modelcontextprotocol/server-google-maps": "^0.6.2",
+    "@modelcontextprotocol/server-memory": "^0.6.2",
+    "@modelcontextprotocol/server-slack": "^2025.1.17",
+    "@types/bcrypt": "^5.0.2",
+    "axios": "^1.7.2",
+    "base64-js": "^1.5.1",
+    "base64-url": "^2.3.3",
+    "bitcoin-mcp": "^0.0.5",
+    "coincap-mcp": "^0.9.3",
+    "dotenv": "^10.0.0",
+    "express": "^4.19.2",
+    "fs-extra": "^11.2.0",
+    "mcp-duckduckgo-search": "^0.0.2",
+    "mongodb": "^6.13.1",
+    "puppeteer": "^24.2.1",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "universal-user-agent": "^7.0.2",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/base64-url": "^2.2.2",
+    "@types/express": "^4.17.21",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^20.12.7",
+    "@types/uuid": "^10.0.0",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.4.5"
+  }
+}

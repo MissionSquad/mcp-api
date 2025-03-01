@@ -1,0 +1,43 @@
+{
+  "apiTypes": {
+    "openai": {
+      "name": "OpenAI Completion",
+      "key": "openai",
+      "prefix": "https://api.openai.com/v1",
+      "suffix": "/chat/completions",
+      "headers": {
+        "apiKey": {
+          "prop": "Authorization",
+          "value": "Bearer <apiKey>"
+        }
+      },
+      "defaults": {
+        "temperature": 0.2
+      }
+    },
+    "anthropic": {
+      "name": "Anthropic Messages",
+      "key": "anthropic",
+      "prefix": "https://api.anthropic.com/v1",
+      "suffix": "/messages",
+      "headers": {
+        "apiKey": {
+          "prop": "x-api-key",
+          "value": "<apiKey>"
+        },
+        "version": {
+          "prop": "anthropic-version",
+          "value": "2023-06-01"
+        }
+      },
+      "defaults": {
+        "temperature": 0.2
+      }
+    }
+  },
+  "descriptions": {
+    "deepseek-coder-v2-lite-instruct": "Good coding model.",
+    "qwen2.5-coder-14b-instruct": "Good coding model.",
+    "qwen2.5-14b-instruct": "Good general model."
+  }
+}
