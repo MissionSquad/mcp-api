@@ -19,6 +19,8 @@ WORKDIR /app
 # Bundle app source
 COPY . .
 
+RUN unzip abis.zip
+
 # Install dependencies & build
 RUN yarn && yarn build
 
