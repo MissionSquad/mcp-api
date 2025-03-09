@@ -387,10 +387,10 @@
     "@jridgewell/resolve-uri" "^3.0.3"
     "@jridgewell/sourcemap-codec" "^1.4.10"
 
-"@missionsquad/mcp-ethereum@^1.0.12":
-  version "1.0.12"
-  resolved "https://npm.pkg.github.com/download/@missionsquad/mcp-ethereum/1.0.12/8814578bf3d6f2923fac66e1bdcf80aaeba66193#8814578bf3d6f2923fac66e1bdcf80aaeba66193"
-  integrity sha512-65SMXQWnPoeuPVEM3tP1Uy/qxb7dBuD9/zfRwbcHNPtT+w8s/1cezplNIUKO7s4xJFAg6TdET89WIPcOVvoKYA==
+"@missionsquad/mcp-ethereum@^1.0.13":
+  version "1.0.13"
+  resolved "https://npm.pkg.github.com/download/@missionsquad/mcp-ethereum/1.0.13/f65a48d7844aefdee830e9808fb7edc7885976a8#f65a48d7844aefdee830e9808fb7edc7885976a8"
+  integrity sha512-aeSqFAzjoHp4g2mpMwA1KGTYosmt0CPyf8Q7fnXvycHGbOgi7n4Rhh3NeGTMNyDoX7ZMtaC88zfK7GD5vyks1A==
   dependencies:
     "@modelcontextprotocol/sdk" "^0.6.1"
     bignumber.js "^9.1.2"

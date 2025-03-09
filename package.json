@@ -1,6 +1,6 @@
 {
   "name": "@missionsquad/mcp-api",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "MCP Servers exposed via HTTP API",
   "main": "lib/index.js",
   "repository": "missionsquad/mcp-api",
@@ -26,7 +26,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@cyanheads/toolkit-mcp-server": "^1.0.1",
-    "@missionsquad/mcp-ethereum": "^1.0.12",
+    "@missionsquad/mcp-ethereum": "^1.0.13",
     "@missionsquad/mcp-github": "^0.6.2",
     "@modelcontextprotocol/sdk": "^1.5.0",
     "@modelcontextprotocol/server-gdrive": "^2025.1.14",
