@@ -1,8 +1,9 @@
 .DS_Store
 node_modules
+coverage
 .env
 .npmrc
-lib
+dist
 uploads
 data
 tmp

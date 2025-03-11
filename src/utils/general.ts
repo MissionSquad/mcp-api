@@ -1,5 +1,3 @@
-import crypto from 'crypto'
-import { v4 as uuidv4 } from 'uuid'
 import { env } from '../env'
 
 export interface StringMap {
@@ -12,10 +10,6 @@ export function log({ level, msg, error }: { level: string; msg: string; error?:
   if (error != null) {
     console.error(error)
   }
-}
-
-export function getId() {
-  return uuidv4()
 }
 
 export function sleep(ms: number) {
@@ -44,7 +38,6 @@ export function base64ToObject<T>(base64: string): T {
   const jsonString = base64ToString(base64)
   return JSON.parse(jsonString) as T
 }
-
 
 export function retryWithExponentialBackoff(
   fn: (...args: any) => Promise<any>,

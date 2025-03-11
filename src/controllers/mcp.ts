@@ -5,9 +5,23 @@ import { Resource } from '..'
 import { log } from '../utils/general'
 
 export interface ToolCallRequest {
+  username?: string
   serverName: string
   methodName: string
   args: Record<string, unknown>
+}
+
+export interface SetSecretRequest {
+  username: string
+  serverName: string
+  secretName: string
+  secretValue: string
+}
+
+export interface DeleteSecretRequest {
+  username: string
+  serverName: string
+  secretName: string
 }
 
 export class MCPController implements Resource {
@@ -27,6 +41,8 @@ export class MCPController implements Resource {
     this.app.post('/mcp/tool/call', this.callTool.bind(this))
     this.app.get('/mcp/servers', this.getServers.bind(this))
     this.app.get('/mcp/tools', this.getTools.bind(this))
+    this.app.post('/secrets/set', this.setSecret.bind(this))
+    this.app.post('/secrets/delete', this.deleteSecret.bind(this))
   }
 
   private getServers(req: Request, res: Response, next: NextFunction): void {
@@ -53,9 +69,37 @@ export class MCPController implements Resource {
 
   private async callTool(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { serverName, methodName, args } = req.body as ToolCallRequest
-      const result = await this.mcpService.callTool(serverName, methodName, args)
+      const body = req.body as ToolCallRequest
+      const { serverName, methodName, args } = body
+      const username = body.username ?? 'default'
+      log({ level: 'info', msg: `calling tool ${methodName} on server ${serverName} with args ${JSON.stringify(args)}` })
+      const result = await this.mcpService.callTool(username, serverName, methodName, args)
       res.json({ success: true, data: result })
+    } catch (error) {
+      log({ level: 'error', msg: `error calling tool: ${(error as Error).message}` })
+      res.status(500).json({ success: false, error: (error as Error).message })
+    }
+  }
+
+  public async setSecret(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const body = req.body as SetSecretRequest
+      const { serverName, secretName, secretValue } = body
+      const username = body.username ?? 'default'
+      await this.mcpService.setSecret(username, serverName, secretName, secretValue)
+      res.json({ success: true })
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message })
+    }
+  }
+
+  public async deleteSecret(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const body = req.body as DeleteSecretRequest
+      const { serverName, secretName } = body
+      const username = body.username ?? 'default'
+      await this.mcpService.deleteSecret(username, serverName, secretName)
+      res.json({ success: true })
     } catch (error) {
       res.status(500).json({ success: false, error: (error as Error).message })
     }

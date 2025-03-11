@@ -1,0 +1,15 @@
+{
+  "roots": ["<rootDir>/"],
+  "collectCoverage": true,
+  "collectCoverageFrom": ["src/*.ts", "src/**/*.ts"],
+  "preset": "ts-jest",
+  "testEnvironment": "node",
+  "transform": {
+    "^.+\\.ts?$": "ts-jest",
+    "^.+\\.js?$": ["babel-jest", { "rootMode": "upward" }]
+  },
+  "transformIgnorePatterns": ["node_modules/(?!nanoid|gpt-tokenizer|apache-arrow)"],
+  "testMatch": ["<rootDir>/**/?(*.)(spec|test).(ts|js)?(x)"],
+  "testTimeout": 60000,
+  "noEmit": true
+}

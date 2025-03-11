@@ -1,10 +1,10 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { log, sanitizeString } from '../utils/general'
-import { CallToolRequestSchema, CallToolResultSchema, ListToolsResultSchema } from '@modelcontextprotocol/sdk/types.js'
-import { z } from 'zod'
+import { CallToolResultSchema, ListToolsResultSchema } from '@modelcontextprotocol/sdk/types.js'
 import { IndexDefinition, MongoConnectionParams, MongoDBClient } from '../utils/mongodb'
 import { Resource } from '..'
+import { Secrets } from './secrets'
 
 export interface MCPConnection {
   client: Client
@@ -54,13 +54,16 @@ export class MCPService implements Resource {
   private list: MCPServer[] = []
   private serverKeys: string[] = []
   private mcpDBClient: MongoDBClient<MCPServer>
+  private secrets: Secrets
 
   constructor({ mongoParams }: { mongoParams: MongoConnectionParams }) {
     this.mcpDBClient = new MongoDBClient<MCPServer>(mongoParams, mcpIndexes)
+    this.secrets = new Secrets({ mongoParams })
   }
 
   public async init() {
     await this.mcpDBClient.connect('mcp')
+    await this.secrets.init()
     const list = await this.mcpDBClient.find({})
     this.list = (list ?? []).map(({ _id, ...server }) => ({ ...server, status: 'disconnected' }))
     for (const server of this.list) {
@@ -94,8 +97,8 @@ export class MCPService implements Resource {
       log({ level: 'info', msg: `${serverKey} transport closed` })
       this.servers[serverKey].status = 'disconnected'
     }
-
-    this.servers[serverKey].connection?.transport.start() // can't call start again, so we reassign it below with a monkey patch
+    // can't call start again, so we reassign it below with a monkey patch. thanks for the tip @saoudrizwan!
+    this.servers[serverKey].connection?.transport.start()
     const stderrStream = this.servers[serverKey].connection?.transport.stderr
     if (stderrStream) {
       stderrStream.on('data', async (data: Buffer) => {
@@ -114,7 +117,7 @@ export class MCPService implements Resource {
     log({ level: 'info', msg: `${serverKey} connected` })
   }
 
-  public async callTool(serverName: string, methodName: string, args: Record<string, unknown>) {
+  public async callTool(username: string, serverName: string, methodName: string, args: Record<string, unknown>) {
     const server = Object.values(this.servers).find((server) => server.name === serverName)
     if (!server) {
       log({ level: 'error', msg: `Server ${serverName} not found` })
@@ -124,9 +127,27 @@ export class MCPService implements Resource {
       log({ level: 'error', msg: `Server ${serverName} not connected. Status: ${server.status}` })
       return undefined
     }
+    const secrets = await this.secrets.getSecrets(username, serverName)
+    if (secrets[serverName] != null) {
+      args = { ...args, ...secrets[serverName] }
+    }
+    log({ level: 'info', msg: `Calling tool - ${serverName}:${methodName}` })
     const toolResponse = await server.connection!.client.callTool({ name: methodName, arguments: args }, CallToolResultSchema)
     log({ level: 'info', msg: `Tool called - ${serverName}:${methodName}` })
+    if (Array.isArray(toolResponse.content)) {
+      toolResponse.content = toolResponse.content.map((item) => {
+        return item
+      })
+    }
     return toolResponse
+  }
+
+  public async setSecret(username: string, serverName: string, secretName: string, secretValue: string) {
+    await this.secrets.updateSecret({ username, serverName, secretName, secretValue, action: 'update' })
+  }
+
+  public async deleteSecret(username: string, serverName: string, secretName: string) {
+    await this.secrets.updateSecret({ username, serverName, secretName, secretValue: '', action: 'delete' })
   }
 
   public async stop() {
