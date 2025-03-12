@@ -12,13 +12,10 @@ COPY . .
 # Install dependencies & build
 RUN yarn && yarn build
 
-RUN rm -f .npmrc
-
 # Expose port 8080 & 443
 EXPOSE 8080 443
 
-
-
+VOLUME [ "/app/packages" ]
 
 # Start Node.js app
 CMD ["node", "--experimental-require-module", "dist/index.js"]

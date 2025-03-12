@@ -29,12 +29,14 @@ export interface AddServerRequest {
   command: string
   args?: string[]
   env?: Record<string, string>
+  enabled?: boolean
 }
 
 export interface UpdateServerRequest {
   command?: string
   args?: string[]
   env?: Record<string, string>
+  enabled?: boolean
 }
 
 export class MCPController implements Resource {
@@ -44,6 +46,14 @@ export class MCPController implements Resource {
   constructor({ app, mongoParams }: { app: Express, mongoParams: MongoConnectionParams }) {
     this.app = app
     this.mcpService = new MCPService({ mongoParams })
+  }
+  
+  /**
+   * Get the MCP service instance
+   * @returns The MCP service instance
+   */
+  public getMcpService(): MCPService {
+    return this.mcpService
   }
 
   public async init() {
@@ -57,6 +67,8 @@ export class MCPController implements Resource {
     this.app.post('/mcp/servers', this.addServer.bind(this))
     this.app.put('/mcp/servers/:name', this.updateServer.bind(this))
     this.app.delete('/mcp/servers/:name', this.deleteServer.bind(this))
+    this.app.put('/mcp/servers/:name/enable', this.enableServer.bind(this))
+    this.app.put('/mcp/servers/:name/disable', this.disableServer.bind(this))
     this.app.get('/mcp/tools', this.getTools.bind(this))
     this.app.post('/secrets/set', this.setSecret.bind(this))
     this.app.post('/secrets/delete', this.deleteSecret.bind(this))
@@ -65,7 +77,8 @@ export class MCPController implements Resource {
   private getServers(req: Request, res: Response, next: NextFunction): void {
     try {
       const servers = Object.values(this.mcpService.servers)
-        .map(({ name, command, args, env, status, toolsList, errors }) => ({ name, command, args, env, status, toolsList, errors }))
+        .map(({ name, command, args, env, status, enabled, toolsList, errors }) => 
+          ({ name, command, args, env, status, enabled, toolsList, errors }))
       log({ level: 'info', msg: 'sending servers list'})
       res.json({ success: true, servers })
     } catch (error) {
@@ -161,6 +174,26 @@ export class MCPController implements Resource {
         res.status(404).json({ success: false, error: `Server ${name} not found` })
         return
       }
+      res.json({ success: true, server })
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message })
+    }
+  }
+
+  private async enableServer(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const name = req.params.name
+      const server = await this.mcpService.enableServer(name)
+      res.json({ success: true, server })
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message })
+    }
+  }
+
+  private async disableServer(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const name = req.params.name
+      const server = await this.mcpService.disableServer(name)
       res.json({ success: true, server })
     } catch (error) {
       res.status(500).json({ success: false, error: (error as Error).message })

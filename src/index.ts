@@ -5,6 +5,7 @@ import { log } from './utils/general'
 import { env } from './env'
 import { MongoConnectionParams } from './utils/mongodb'
 import { MCPController } from './controllers/mcp'
+import { PackagesController } from './controllers/packages'
 
 export type Resource = {
   init: () => Promise<void>
@@ -31,10 +32,25 @@ export class API {
 
   public async start() {
     const { app } = this
+    
+    // Initialize MCP controller
     const mcpController = new MCPController({ app, mongoParams })
     await mcpController.init()
     mcpController.registerRoutes()
     this.resources.push(mcpController)
+    
+    // Initialize Packages controller
+    const packagesController = new PackagesController({ 
+      app, 
+      mongoParams, 
+      mcpService: mcpController.getMcpService() 
+    })
+    await packagesController.init()
+    packagesController.registerRoutes()
+    this.resources.push(packagesController)
+    
+    // Set up circular dependency between MCPService and PackageService
+    mcpController.getMcpService().setPackageService(packagesController.getPackageService())
 
     // Start the server
     app.listen(env.PORT, () => {
