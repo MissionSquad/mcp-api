@@ -24,6 +24,19 @@ export interface DeleteSecretRequest {
   secretName: string
 }
 
+export interface AddServerRequest {
+  name: string
+  command: string
+  args?: string[]
+  env?: Record<string, string>
+}
+
+export interface UpdateServerRequest {
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+}
+
 export class MCPController implements Resource {
   private app: Express
   private mcpService: MCPService
@@ -40,6 +53,10 @@ export class MCPController implements Resource {
   public registerRoutes(): void {
     this.app.post('/mcp/tool/call', this.callTool.bind(this))
     this.app.get('/mcp/servers', this.getServers.bind(this))
+    this.app.get('/mcp/servers/:name', this.getServer.bind(this))
+    this.app.post('/mcp/servers', this.addServer.bind(this))
+    this.app.put('/mcp/servers/:name', this.updateServer.bind(this))
+    this.app.delete('/mcp/servers/:name', this.deleteServer.bind(this))
     this.app.get('/mcp/tools', this.getTools.bind(this))
     this.app.post('/secrets/set', this.setSecret.bind(this))
     this.app.post('/secrets/delete', this.deleteSecret.bind(this))
@@ -100,6 +117,51 @@ export class MCPController implements Resource {
       const username = body.username ?? 'default'
       await this.mcpService.deleteSecret(username, serverName, secretName)
       res.json({ success: true })
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message })
+    }
+  }
+
+  private async addServer(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const body = req.body as AddServerRequest
+      const result = await this.mcpService.addServer(body)
+      res.json({ success: true, server: result })
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message })
+    }
+  }
+
+  private async updateServer(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const name = req.params.name
+      const body = req.body as UpdateServerRequest
+      const result = await this.mcpService.updateServer(name, body)
+      res.json({ success: true, server: result })
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message })
+    }
+  }
+
+  private async deleteServer(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const name = req.params.name
+      await this.mcpService.deleteServer(name)
+      res.json({ success: true })
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message })
+    }
+  }
+
+  private async getServer(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const name = req.params.name
+      const server = await this.mcpService.getServer(name)
+      if (!server) {
+        res.status(404).json({ success: false, error: `Server ${name} not found` })
+        return
+      }
+      res.json({ success: true, server })
     } catch (error) {
       res.status(500).json({ success: false, error: (error as Error).message })
     }

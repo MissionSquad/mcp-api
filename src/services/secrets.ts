@@ -1,6 +1,7 @@
 import { IndexDefinition, MongoConnectionParams, MongoDBClient } from '../utils/mongodb'
 import { SecretEncryptor } from '../utils/secretEncryptor'
 import { env } from '../env'
+import { log } from '../utils/general'
 
 export interface UserSecret {
   username: string
@@ -32,7 +33,7 @@ export class Secrets {
   }
 
   public async getSecrets(username: string, server: string) {
-    console.log(`get secrets for user ${username}`)
+    log({ level: 'info', msg: `get secrets for user ${username}` })
     if (this.secretsDBClient == null) {
       throw new Error('secretsDBClient is not initialized')
     }

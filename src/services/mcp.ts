@@ -150,6 +150,86 @@ export class MCPService implements Resource {
     await this.secrets.updateSecret({ username, serverName, secretName, secretValue: '', action: 'delete' })
   }
 
+  public async addServer(serverData: { name: string; command: string; args?: string[]; env?: Record<string, string> }): Promise<MCPServer> {
+    const { name, command, args = [], env = {} } = serverData;
+    
+    // Check if server with this name already exists
+    const existingServer = await this.mcpDBClient.findOne({ name });
+    if (existingServer) {
+      throw new Error(`Server with name ${name} already exists`);
+    }
+    
+    const server: MCPServer = {
+      name,
+      command,
+      args,
+      env,
+      status: 'disconnected'
+    };
+    
+    await this.mcpDBClient.insert(server);
+    await this.startMCPServer(server);
+    
+    return server;
+  }
+
+  public async updateServer(name: string, serverData: { command?: string; args?: string[]; env?: Record<string, string> }): Promise<MCPServer | null> {
+    const existingServer = await this.mcpDBClient.findOne({ name });
+    if (!existingServer) {
+      throw new Error(`Server with name ${name} not found`);
+    }
+    
+    const updatedServer: MCPServer = {
+      ...existingServer,
+      ...serverData,
+      name // Ensure name doesn't change
+    };
+    
+    await this.mcpDBClient.update(updatedServer, { name });
+    
+    // Stop the existing server if it's running
+    const serverKey = sanitizeString(`${name}-${existingServer.command}`);
+    if (this.servers[serverKey]) {
+      try {
+        await this.servers[serverKey].connection?.transport.close();
+        await this.servers[serverKey].connection?.client.close();
+        delete this.servers[serverKey];
+      } catch (error) {
+        log({ level: 'error', msg: `Error stopping server ${name}: ${error}` });
+      }
+    }
+    
+    // Start the updated server
+    await this.startMCPServer(updatedServer);
+    
+    return updatedServer;
+  }
+
+  public async deleteServer(name: string): Promise<void> {
+    const existingServer = await this.mcpDBClient.findOne({ name });
+    if (!existingServer) {
+      throw new Error(`Server with name ${name} not found`);
+    }
+    
+    // Stop the server if it's running
+    const serverKey = sanitizeString(`${name}-${existingServer.command}`);
+    if (this.servers[serverKey]) {
+      try {
+        await this.servers[serverKey].connection?.transport.close();
+        await this.servers[serverKey].connection?.client.close();
+        delete this.servers[serverKey];
+      } catch (error) {
+        log({ level: 'error', msg: `Error stopping server ${name}: ${error}` });
+      }
+    }
+    
+    await this.mcpDBClient.delete({ name }, false);
+  }
+
+  public async getServer(name: string): Promise<MCPServer | null> {
+    return this.mcpDBClient.findOne({ name });
+  }
+
   public async stop() {
     log({ level: 'info', msg: 'Stopping MCP servers' })
     for (const serverKey in this.servers) {
