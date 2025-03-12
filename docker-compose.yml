@@ -8,15 +8,10 @@ services:
     restart: unless-stopped
     ports:
       - 8080:8080
-      - 443:443
     env_file:
      - .env
     volumes:
-      - .env:/app/.env
-      - ./data:/app/data
-      - ./cloudflare_credentials:/opt/cloudflare/credentials
-      - ./nginx:/etc/nginx/conf.d # nginx configs
-      - ./certs:/etc/letsencrypt # tls certificates
+      - ./packages:/app/packages
     logging:
       driver: 'json-file'
       options:
