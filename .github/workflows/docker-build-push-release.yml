@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ vars.LOWERCASE_ORG }}/${{ github.event.repository.name }}
   KEEP_RELEASES: 10
   KEEP_IMAGES: 10
 
