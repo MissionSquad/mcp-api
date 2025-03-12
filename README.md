@@ -9,6 +9,7 @@ MCP API addresses a critical limitation in the current MCP server ecosystem: mos
 1. Exposing MCP servers via a unified HTTP API
 2. Abstracting secret handling through secure encryption
 3. Supporting multi-user access to the same MCP server instances
+4. Providing package management for easy installation and configuration of MCP servers
 
 Instead of embedding sensitive credentials in environment variables, MCP API stores them encrypted in MongoDB and retrieves/decrypts them as needed for specific tool operations.
 
@@ -17,6 +18,7 @@ Instead of embedding sensitive credentials in environment variables, MCP API sto
 - **Multi-user Support**: Multiple users can access the same MCP server instances with their own credentials
 - **Secure Secret Management**: All sensitive information is stored encrypted in MongoDB
 - **User-specific Secret Storage**: Each user's secrets are isolated and encrypted separately
+- **Package Management**: Simplified installation and configuration of MCP server packages
 - **HTTP API**: Simple REST API for accessing MCP tools and managing secrets
 - **Containerized Deployment**: Docker and Docker Compose support for easy deployment
 
@@ -26,8 +28,9 @@ MCP API acts as a proxy between clients and MCP servers:
 
 1. **Client Requests**: Applications send requests to the HTTP API
 2. **Secret Management**: The API retrieves and decrypts user-specific secrets as needed
-3. **MCP Server Communication**: The API communicates with MCP servers using the Model Context Protocol
-4. **Response Handling**: Results from MCP servers are returned to clients
+3. **Package Management**: The API handles installation, configuration, and lifecycle of MCP server packages
+4. **MCP Server Communication**: The API communicates with MCP servers using the Model Context Protocol
+5. **Response Handling**: Results from MCP servers are returned to clients
 
 The system uses AES-256-GCM encryption for all stored secrets, with a separate encryption key for each deployment.
 
@@ -96,6 +99,52 @@ docker run -p 8080:8080 --env-file .env mcp-api
 ```
 
 ## API Reference
+
+### Package Management
+
+#### Install an MCP Package
+
+```
+POST /packages/install
+```
+
+Request body:
+```json
+{
+  "name": "package-name",
+  "version": "1.0.0",  // Optional, defaults to "latest"
+  "serverName": "unique-server-name",
+  "command": "node",  // Optional, auto-detected if not provided
+  "args": ["--option1", "--option2"],  // Optional
+  "env": {  // Optional
+    "NODE_ENV": "production"
+  }
+}
+```
+
+#### List Installed Packages
+
+```
+GET /packages
+```
+
+#### Get Package by Name
+
+```
+GET /packages/by-name/:name
+```
+
+#### Get Package by Server ID
+
+```
+GET /packages/by-id/:name
+```
+
+#### Uninstall a Package
+
+```
+DELETE /packages/:name
+```
 
 ### MCP Tool Operations
 
@@ -184,6 +233,22 @@ DELETE /mcp/servers/:name
 ```
 GET /mcp/servers/:name
 ```
+
+#### Enable an MCP Server
+
+```
+PUT /mcp/servers/:name/enable
+```
+
+Enables a previously disabled MCP server.
+
+#### Disable an MCP Server
+
+```
+PUT /mcp/servers/:name/disable
+```
+
+Disables an MCP server without removing it from the system.
 
 ### Secret Management
 

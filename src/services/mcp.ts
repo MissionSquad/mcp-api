@@ -35,6 +35,7 @@ export interface MCPServer {
   args: string[]
   env: Record<string, string>
   status: 'connected' | 'connecting' | 'disconnected' | 'error'
+  enabled: boolean
   errors?: string[]
   connection?: MCPConnection
   toolsList?: ToolsList
@@ -55,17 +56,30 @@ export class MCPService implements Resource {
   private serverKeys: string[] = []
   private mcpDBClient: MongoDBClient<MCPServer>
   private secrets: Secrets
+  private packageService?: any // Will be set after initialization to avoid circular dependency
 
   constructor({ mongoParams }: { mongoParams: MongoConnectionParams }) {
     this.mcpDBClient = new MongoDBClient<MCPServer>(mongoParams, mcpIndexes)
     this.secrets = new Secrets({ mongoParams })
   }
 
+  /**
+   * Set the package service reference
+   * This is called after initialization to avoid circular dependency
+   */
+  public setPackageService(packageService: any): void {
+    this.packageService = packageService
+  }
+
   public async init() {
     await this.mcpDBClient.connect('mcp')
     await this.secrets.init()
     const list = await this.mcpDBClient.find({})
-    this.list = (list ?? []).map(({ _id, ...server }) => ({ ...server, status: 'disconnected' }))
+    this.list = (list ?? []).map(({ _id, ...server }) => ({ 
+      ...server, 
+      status: 'disconnected',
+      enabled: server.enabled !== false // Default to true if not set
+    }))
     for (const server of this.list) {
       await this.startMCPServer(server)
     }
@@ -73,48 +87,75 @@ export class MCPService implements Resource {
   }
 
   private async startMCPServer(server: MCPServer) {
+    // Skip if server is disabled
+    if (server.enabled === false) {
+      log({ level: 'info', msg: `Server ${server.name} is disabled, skipping startup` })
+      return
+    }
+
     const serverKey = sanitizeString(`${server.name}-${server.command}`)
-    const client = new Client(
-      { name: 'MSQStdioClient', version: '1.0.0' },
-      { capabilities: { prompts: {}, resources: {}, tools: {} } }
-    )
-    const { command, args, env } = server
-    const transport = new StdioClientTransport({ command, args, env: { ...env, ...globalEnv }, stderr: 'pipe' })
-    this.servers[serverKey] = {
-      ...server,
-      status: 'connecting',
-      errors: [],
-      connection: { client, transport }
-    }
-    this.serverKeys.push(serverKey)
+    
+    try {
+      const client = new Client(
+        { name: 'MSQStdioClient', version: '1.0.0' },
+        { capabilities: { prompts: {}, resources: {}, tools: {} } }
+      )
+      const { command, args, env } = server
+      const transport = new StdioClientTransport({ command, args, env: { ...env, ...globalEnv }, stderr: 'pipe' })
+      this.servers[serverKey] = {
+        ...server,
+        status: 'connecting',
+        errors: [],
+        connection: { client, transport }
+      }
+      this.serverKeys.push(serverKey)
 
-    transport.onerror = async (error) => {
-      log({ level: 'error', msg: `${serverKey} transport error: ${error}` })
-      this.servers[serverKey].errors?.push(error.message)
-    }
+      transport.onerror = async (error) => {
+        log({ level: 'error', msg: `${serverKey} transport error: ${error}` })
+        this.servers[serverKey].errors?.push(error.message)
+      }
 
-    transport.onclose = async () => {
-      log({ level: 'info', msg: `${serverKey} transport closed` })
-      this.servers[serverKey].status = 'disconnected'
-    }
-    // can't call start again, so we reassign it below with a monkey patch. thanks for the tip @saoudrizwan!
-    this.servers[serverKey].connection?.transport.start()
-    const stderrStream = this.servers[serverKey].connection?.transport.stderr
-    if (stderrStream) {
-      stderrStream.on('data', async (data: Buffer) => {
-        log({ level: 'error', msg: `${serverKey} stderr: ${data.toString()}` })
-        this.servers[serverKey].errors?.push(data.toString())
-      })
-    } else {
-      log({ level: 'error', msg: `${serverKey} stderr stream is null` })
-    }
-    this.servers[serverKey].connection!.transport.start = async () => {}
+      transport.onclose = async () => {
+        log({ level: 'info', msg: `${serverKey} transport closed` })
+        this.servers[serverKey].status = 'disconnected'
+      }
+      
+      // can't call start again, so we reassign it below with a monkey patch. thanks for the tip @saoudrizwan!
+      this.servers[serverKey].connection?.transport.start()
+      const stderrStream = this.servers[serverKey].connection?.transport.stderr
+      if (stderrStream) {
+        stderrStream.on('data', async (data: Buffer) => {
+          log({ level: 'error', msg: `${serverKey} stderr: ${data.toString()}` })
+          this.servers[serverKey].errors?.push(data.toString())
+        })
+      } else {
+        log({ level: 'error', msg: `${serverKey} stderr stream is null` })
+      }
+      this.servers[serverKey].connection!.transport.start = async () => {}
 
-    this.servers[serverKey].connection!.client.connect(this.servers[serverKey].connection!.transport)
-    this.servers[serverKey].status = 'connected'
-    const tools = await this.servers[serverKey].connection!.client.request({ method: 'tools/list' }, ListToolsResultSchema)
-    this.servers[serverKey].toolsList = tools.tools
-    log({ level: 'info', msg: `${serverKey} connected` })
+      this.servers[serverKey].connection!.client.connect(this.servers[serverKey].connection!.transport)
+      this.servers[serverKey].status = 'connected'
+      const tools = await this.servers[serverKey].connection!.client.request({ method: 'tools/list' }, ListToolsResultSchema)
+      this.servers[serverKey].toolsList = tools.tools
+      log({ level: 'info', msg: `${serverKey} connected` })
+    } catch (error: any) {
+      log({ level: 'error', msg: `Failed to start server ${server.name}: ${error.message}` })
+      
+      // Attempt to install missing package if PackageService is available
+      let installSuccess = false;
+      if (this.packageService) {
+        log({ level: 'info', msg: `Attempting to install missing package for server ${server.name}` });
+        installSuccess = await this.packageService.installMissingPackage(server.name);
+      }
+      
+      // If installation failed or no PackageService, mark as disabled
+      if (!installSuccess) {
+        // Mark server as disabled in the database
+        server.enabled = false;
+        await this.mcpDBClient.update(server, { name: server.name });
+        log({ level: 'info', msg: `Server ${server.name} has been disabled due to startup failure` });
+      }
+    }
   }
 
   public async callTool(username: string, serverName: string, methodName: string, args: Record<string, unknown>) {
@@ -150,8 +191,8 @@ export class MCPService implements Resource {
     await this.secrets.updateSecret({ username, serverName, secretName, secretValue: '', action: 'delete' })
   }
 
-  public async addServer(serverData: { name: string; command: string; args?: string[]; env?: Record<string, string> }): Promise<MCPServer> {
-    const { name, command, args = [], env = {} } = serverData;
+  public async addServer(serverData: { name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }): Promise<MCPServer> {
+    const { name, command, args = [], env = {}, enabled = true } = serverData;
     
     // Check if server with this name already exists
     const existingServer = await this.mcpDBClient.findOne({ name });
@@ -164,7 +205,8 @@ export class MCPService implements Resource {
       command,
       args,
       env,
-      status: 'disconnected'
+      status: 'disconnected',
+      enabled
     };
     
     await this.mcpDBClient.insert(server);
@@ -173,11 +215,14 @@ export class MCPService implements Resource {
     return server;
   }
 
-  public async updateServer(name: string, serverData: { command?: string; args?: string[]; env?: Record<string, string> }): Promise<MCPServer | null> {
+  public async updateServer(name: string, serverData: { command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }): Promise<MCPServer | null> {
     const existingServer = await this.mcpDBClient.findOne({ name });
     if (!existingServer) {
       throw new Error(`Server with name ${name} not found`);
     }
+    
+    // Check if enabled state is changing
+    const enabledChanged = serverData.enabled !== undefined && serverData.enabled !== existingServer.enabled;
     
     const updatedServer: MCPServer = {
       ...existingServer,
@@ -187,6 +232,16 @@ export class MCPService implements Resource {
     
     await this.mcpDBClient.update(updatedServer, { name });
     
+    // If only the enabled state is changing, use the enable/disable methods
+    if (enabledChanged && Object.keys(serverData).length === 1) {
+      if (serverData.enabled) {
+        return this.enableServer(name);
+      } else {
+        return this.disableServer(name);
+      }
+    }
+    
+    // Otherwise, restart the server with the new configuration
     // Stop the existing server if it's running
     const serverKey = sanitizeString(`${name}-${existingServer.command}`);
     if (this.servers[serverKey]) {
@@ -199,7 +254,7 @@ export class MCPService implements Resource {
       }
     }
     
-    // Start the updated server
+    // Start the updated server (startMCPServer will respect the enabled flag)
     await this.startMCPServer(updatedServer);
     
     return updatedServer;
@@ -228,6 +283,49 @@ export class MCPService implements Resource {
 
   public async getServer(name: string): Promise<MCPServer | null> {
     return this.mcpDBClient.findOne({ name });
+  }
+
+  public async enableServer(name: string): Promise<MCPServer | null> {
+    const server = await this.mcpDBClient.findOne({ name });
+    if (!server) {
+      throw new Error(`Server ${name} not found`);
+    }
+    
+    server.enabled = true;
+    await this.mcpDBClient.update(server, { name });
+    
+    // If server is not running, start it
+    const serverKey = sanitizeString(`${name}-${server.command}`);
+    if (!this.servers[serverKey] || this.servers[serverKey].status === 'disconnected' || this.servers[serverKey].status === 'error') {
+      await this.startMCPServer(server);
+    }
+    
+    return server;
+  }
+
+  public async disableServer(name: string): Promise<MCPServer | null> {
+    const server = await this.mcpDBClient.findOne({ name });
+    if (!server) {
+      throw new Error(`Server ${name} not found`);
+    }
+    
+    server.enabled = false;
+    await this.mcpDBClient.update(server, { name });
+    
+    // If server is running, stop it
+    const serverKey = sanitizeString(`${name}-${server.command}`);
+    if (this.servers[serverKey] && this.servers[serverKey].status !== 'disconnected') {
+      try {
+        await this.servers[serverKey].connection?.transport.close();
+        await this.servers[serverKey].connection?.client.close();
+        this.servers[serverKey].status = 'disconnected';
+        log({ level: 'info', msg: `Server ${name} stopped due to being disabled` });
+      } catch (error) {
+        log({ level: 'error', msg: `Error stopping server ${name}: ${error}` });
+      }
+    }
+    
+    return server;
   }
 
   public async stop() {
