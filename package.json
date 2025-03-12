@@ -33,7 +33,6 @@
     "base64-js": "^1.5.1",
     "base64-url": "^2.3.3",
     "dotenv": "^10.0.0",
-    "cross-spawn": "^7.0.6",
     "express": "^4.19.2",
     "mongodb": "^6.13.1",
     "tslib": "^2.3.1"

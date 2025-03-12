@@ -1,0 +1,4 @@
+# .trivyignore
+# cross-spawn: regular expression denial of service
+# can't seem to find which package is using this
+CVE-2024-21538
