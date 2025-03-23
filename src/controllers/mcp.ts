@@ -117,6 +117,7 @@ export class MCPController implements Resource {
       const { serverName, secretName, secretValue } = body
       const username = body.username ?? 'default'
       await this.mcpService.setSecret(username, serverName, secretName, secretValue)
+      log({ level: 'info', msg: `set secret ${secretName} on server ${serverName}` })
       res.json({ success: true })
     } catch (error) {
       res.status(500).json({ success: false, error: (error as Error).message })
