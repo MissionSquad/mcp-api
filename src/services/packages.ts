@@ -1,6 +1,6 @@
 import { MCPService, MCPServer } from './mcp'
 import { IndexDefinition, MongoConnectionParams, MongoDBClient } from '../utils/mongodb'
-import { log } from '../utils/general'
+import { log, compareVersions } from '../utils/general'
 import * as path from 'path'
 import { existsSync, mkdir, readFile, rm } from 'fs-extra'
 import { promisify } from 'util'
@@ -11,10 +11,13 @@ const exec = promisify(execCallback)
 export interface PackageInfo {
   name: string;
   version: string;
+  latestVersion?: string; // New field to track latest available version
+  updateAvailable?: boolean; // New field to indicate if an update is available
   installPath: string;
   main?: string;
-  status: 'installed' | 'installing' | 'error';
+  status: 'installed' | 'installing' | 'upgrading' | 'error'; // Added 'upgrading' status
   installed: Date;
+  lastUpgraded?: Date; // New field to track last upgrade date
   lastUsed?: Date;
   error?: string;
   mcpServerId?: string;
@@ -356,6 +359,285 @@ export class PackageService {
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error.message };
+    }
+  }
+  
+  /**
+   * Check for available updates for a specific package or all packages
+   * @param serverName Optional server name to check for updates
+   * @returns Object containing update information for packages
+   */
+  async checkForUpdates(serverName?: string): Promise<{
+    updates: Array<{
+      serverName: string;
+      currentVersion: string;
+      latestVersion: string;
+      updateAvailable: boolean;
+    }>;
+  }> {
+    try {
+      // Get packages to check
+      let packages: PackageInfo[];
+      if (serverName) {
+        const pkg = await this.packagesDBClient.findOne({ mcpServerId: serverName });
+        packages = pkg ? [pkg] : [];
+      } else {
+        packages = await this.packagesDBClient.find({});
+      }
+      
+      const updates = [];
+      
+      // Check each package for updates
+      for (const pkg of packages) {
+        try {
+          // Skip packages without mcpServerId
+          if (!pkg.mcpServerId) continue;
+          
+          // Get the latest version from npm registry
+          const npmInfoCmd = `npm view ${pkg.name} version`;
+          const { stdout } = await exec(npmInfoCmd, { cwd: process.cwd() });
+          const latestVersion = stdout.trim();
+          
+          // Compare versions
+          const updateAvailable = compareVersions(pkg.version, latestVersion) < 0;
+          
+          // Update package info in database with latest version info
+          pkg.latestVersion = latestVersion;
+          pkg.updateAvailable = updateAvailable;
+          await this.packagesDBClient.update(pkg, { mcpServerId: pkg.mcpServerId });
+          
+          updates.push({
+            serverName: pkg.mcpServerId,
+            currentVersion: pkg.version,
+            latestVersion,
+            updateAvailable
+          });
+        } catch (error: any) {
+          log({ level: 'error', msg: `Error checking updates for ${pkg.name}: ${error.message}` });
+          updates.push({
+            serverName: pkg.mcpServerId!,
+            currentVersion: pkg.version,
+            latestVersion: 'unknown',
+            updateAvailable: false
+          });
+        }
+      }
+      
+      return { updates };
+    } catch (error: any) {
+      log({ level: 'error', msg: `Error checking for updates: ${error.message}` });
+      return { updates: [] };
+    }
+  }
+  
+  /**
+   * Upgrade a package to the latest version or a specified version
+   * @param serverName The name of the server to upgrade
+   * @param version Optional specific version to upgrade to
+   * @returns Result of the upgrade operation
+   */
+  async upgradePackage(serverName: string, version?: string): Promise<{
+    success: boolean;
+    package?: PackageInfo;
+    server?: MCPServer;
+    error?: string;
+  }> {
+    try {
+      // Get package info
+      const packageInfo = await this.packagesDBClient.findOne({ mcpServerId: serverName });
+      if (!packageInfo) {
+        return { success: false, error: `Package ${serverName} not found` };
+      }
+      
+      // Update status to upgrading
+      packageInfo.status = 'upgrading';
+      await this.packagesDBClient.update(packageInfo, { mcpServerId: serverName });
+      
+      // Get server info
+      const server = await this.mcpService.getServer(serverName);
+      if (!server) {
+        packageInfo.status = 'error';
+        packageInfo.error = `Server ${serverName} not found`;
+        await this.packagesDBClient.update(packageInfo, { mcpServerId: serverName });
+        return { success: false, error: packageInfo.error };
+      }
+      
+      // Disable server temporarily
+      const wasEnabled = server.enabled;
+      if (wasEnabled) {
+        await this.mcpService.disableServer(serverName);
+      }
+      
+      try {
+        // Get the absolute path to the package directory
+        const packageDir = path.resolve(process.cwd(), packageInfo.installPath);
+        
+        // Perform the upgrade
+        const upgradeCmd = `npm install ${packageInfo.name}${version ? '@' + version : '@latest'}`;
+        log({ level: 'info', msg: `Upgrading package: ${upgradeCmd}` });
+        const upgradeResult = await exec(upgradeCmd, { cwd: packageDir });
+        
+        if (upgradeResult.stderr && !upgradeResult.stderr.includes('npm notice') && !upgradeResult.stderr.includes('npm WARN')) {
+          throw new Error(`Error upgrading package: ${upgradeResult.stderr}`);
+        }
+        
+        // Get the new version from package.json
+        const nodeModulesPackageJsonPath = path.join(packageDir, 'node_modules', packageInfo.name, 'package.json');
+        const nodeModulesPackageJson = JSON.parse(await readFile(nodeModulesPackageJsonPath, 'utf8'));
+        const newVersion = nodeModulesPackageJson.version;
+        
+        // Update package info
+        packageInfo.version = newVersion;
+        packageInfo.status = 'installed';
+        packageInfo.lastUpgraded = new Date();
+        packageInfo.updateAvailable = false;
+        
+        // Check if the package structure has changed
+        let serverUpdateNeeded = false;
+        let newCommand = server.command;
+        let newArgs = [...server.args];
+        
+        // Check if the package has bin entries
+        if (nodeModulesPackageJson.bin) {
+          // If bin is a string, use that
+          if (typeof nodeModulesPackageJson.bin === 'string') {
+            newCommand = 'node';
+            // Replace the first arg with the new path
+            if (newArgs.length > 0) {
+              const relativePackageDir = path.relative(process.cwd(), packageDir);
+              newArgs[0] = `./${path.join(relativePackageDir, 'node_modules', packageInfo.name, nodeModulesPackageJson.bin)}`;
+              serverUpdateNeeded = true;
+            }
+          } 
+          // If bin is an object, use the first entry
+          else if (typeof nodeModulesPackageJson.bin === 'object') {
+            const binName = Object.keys(nodeModulesPackageJson.bin)[0];
+            newCommand = 'node';
+            // Replace the first arg with the new path
+            if (newArgs.length > 0) {
+              const relativePackageDir = path.relative(process.cwd(), packageDir);
+              newArgs[0] = `./${path.join(relativePackageDir, 'node_modules', packageInfo.name, nodeModulesPackageJson.bin[binName])}`;
+              serverUpdateNeeded = true;
+            }
+          }
+        } 
+        // Fall back to main file
+        else if (nodeModulesPackageJson.main) {
+          newCommand = 'node';
+          // Replace the first arg with the new path
+          if (newArgs.length > 0) {
+            const relativePackageDir = path.relative(process.cwd(), packageDir);
+            newArgs[0] = `./${path.join(relativePackageDir, 'node_modules', packageInfo.name, nodeModulesPackageJson.main)}`;
+            serverUpdateNeeded = true;
+          }
+        }
+        
+        // Update server configuration if needed
+        let updatedServer = server;
+        if (serverUpdateNeeded) {
+          const updatedServerResult = await this.mcpService.updateServer(serverName, {
+            command: newCommand,
+            args: newArgs
+          });
+          if (!updatedServerResult) {
+            throw new Error(`Failed to update server configuration for ${serverName}`);
+          }
+          updatedServer = updatedServerResult;
+        }
+        
+        // Re-enable server if it was enabled before
+        if (wasEnabled) {
+          const enabledServer = await this.mcpService.enableServer(serverName);
+          if (!enabledServer) {
+            throw new Error(`Failed to re-enable server ${serverName} after upgrade`);
+          }
+          updatedServer = enabledServer;
+        }
+        
+        // Update package info in database
+        await this.packagesDBClient.update(packageInfo, { mcpServerId: serverName });
+        
+        return { 
+          success: true, 
+          package: packageInfo, 
+          server: updatedServer 
+        };
+      } catch (error: any) {
+        // Handle error, update package status
+        log({ level: 'error', msg: `Error upgrading package ${packageInfo.name}: ${error.message}` });
+        packageInfo.status = 'error';
+        packageInfo.error = error.message;
+        await this.packagesDBClient.update(packageInfo, { mcpServerId: serverName });
+        
+        // Try to re-enable server if it was enabled before
+        if (wasEnabled) {
+          try {
+            await this.mcpService.enableServer(serverName);
+          } catch (enableError: any) {
+            log({ level: 'error', msg: `Error re-enabling server ${serverName} after failed upgrade: ${enableError.message}` });
+          }
+        }
+        
+        return { success: false, error: error.message };
+      }
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  }
+  
+  /**
+   * Upgrade all packages to their latest versions
+   * @returns Results of the upgrade operations
+   */
+  async upgradeAllPackages(): Promise<{
+    success: boolean;
+    results: Array<{
+      serverName: string;
+      success: boolean;
+      error?: string;
+    }>;
+  }> {
+    try {
+      // Get all packages
+      const packages = await this.packagesDBClient.find({});
+      const results = [];
+      let overallSuccess = true;
+      
+      // Upgrade each package
+      for (const pkg of packages) {
+        if (!pkg.mcpServerId) continue;
+        
+        try {
+          const result = await this.upgradePackage(pkg.mcpServerId);
+          results.push({
+            serverName: pkg.mcpServerId,
+            success: result.success,
+            error: result.error
+          });
+          
+          if (!result.success) {
+            overallSuccess = false;
+          }
+        } catch (error: any) {
+          results.push({
+            serverName: pkg.mcpServerId,
+            success: false,
+            error: error.message
+          });
+          overallSuccess = false;
+        }
+      }
+      
+      return {
+        success: overallSuccess,
+        results
+      };
+    } catch (error: any) {
+      log({ level: 'error', msg: `Error upgrading all packages: ${error.message}` });
+      return {
+        success: false,
+        results: []
+      };
     }
   }
   

@@ -6,6 +6,7 @@ coverage
 dist
 uploads
 data
+data-test
 tmp
 abis
 abis.zip

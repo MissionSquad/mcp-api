@@ -39,6 +39,12 @@ export interface MCPServer {
   errors?: string[]
   connection?: MCPConnection
   toolsList?: ToolsList
+  // Event handlers for cleanup
+  eventHandlers?: {
+    stderrDataHandler?: (data: Buffer) => void
+    transportErrorHandler?: (error: Error) => void
+    transportCloseHandler?: () => void
+  }
 }
 
 const mcpIndexes: IndexDefinition[] = [
@@ -110,27 +116,47 @@ export class MCPService implements Resource {
       }
       this.serverKeys.push(serverKey)
 
-      transport.onerror = async (error) => {
-        log({ level: 'error', msg: `${serverKey} transport error: ${error}` })
+    // Create event handlers and store references for later cleanup
+    const transportErrorHandler = async (error: Error) => {
+      log({ level: 'error', msg: `${serverKey} transport error: ${error}` })
+      if (this.servers[serverKey]) {
         this.servers[serverKey].errors?.push(error.message)
       }
+    }
 
-      transport.onclose = async () => {
-        log({ level: 'info', msg: `${serverKey} transport closed` })
+    const transportCloseHandler = async () => {
+      log({ level: 'info', msg: `${serverKey} transport closed` })
+      if (this.servers[serverKey]) {
         this.servers[serverKey].status = 'disconnected'
       }
-      
-      // can't call start again, so we reassign it below with a monkey patch. thanks for the tip @saoudrizwan!
-      this.servers[serverKey].connection?.transport.start()
-      const stderrStream = this.servers[serverKey].connection?.transport.stderr
-      if (stderrStream) {
-        stderrStream.on('data', async (data: Buffer) => {
-          log({ level: 'error', msg: `${serverKey} stderr: ${data.toString()}` })
+    }
+    
+    // Store event handler references
+    this.servers[serverKey].eventHandlers = {
+      transportErrorHandler,
+      transportCloseHandler
+    }
+    
+    transport.onerror = transportErrorHandler
+    transport.onclose = transportCloseHandler
+    
+    // can't call start again, so we reassign it below with a monkey patch. thanks for the tip @saoudrizwan!
+    this.servers[serverKey].connection?.transport.start()
+    const stderrStream = this.servers[serverKey].connection?.transport.stderr
+    if (stderrStream) {
+      // Create and store stderr data handler
+      const stderrDataHandler = async (data: Buffer) => {
+        log({ level: 'error', msg: `${serverKey} stderr: ${data.toString()}` })
+        if (this.servers[serverKey]) {
           this.servers[serverKey].errors?.push(data.toString())
-        })
-      } else {
-        log({ level: 'error', msg: `${serverKey} stderr stream is null` })
+        }
       }
+      
+      this.servers[serverKey].eventHandlers!.stderrDataHandler = stderrDataHandler
+      stderrStream.on('data', stderrDataHandler)
+    } else {
+      log({ level: 'error', msg: `${serverKey} stderr stream is null` })
+    }
       this.servers[serverKey].connection!.transport.start = async () => {}
 
       this.servers[serverKey].connection!.client.connect(this.servers[serverKey].connection!.transport)
@@ -171,6 +197,7 @@ export class MCPService implements Resource {
     const secrets = await this.secrets.getSecrets(username, serverName)
     if (secrets[serverName] != null) {
       args = { ...args, ...secrets[serverName] }
+      log({ level: 'info', msg: `Secrets applied to tool call - ${serverName}:${methodName} - ${Object.keys(secrets).join(', ')}` })
     }
     log({ level: 'info', msg: `Calling tool - ${serverName}:${methodName}` })
     const toolResponse = await server.connection!.client.callTool({ name: methodName, arguments: args }, CallToolResultSchema)
@@ -246,6 +273,26 @@ export class MCPService implements Resource {
     const serverKey = sanitizeString(`${name}-${existingServer.command}`);
     if (this.servers[serverKey]) {
       try {
+        // Clean up event listeners first
+        if (this.servers[serverKey].eventHandlers) {
+          const { stderrDataHandler, transportErrorHandler, transportCloseHandler } = this.servers[serverKey].eventHandlers;
+          
+          // Remove stderr data handler if it exists
+          if (stderrDataHandler && this.servers[serverKey].connection?.transport.stderr) {
+            this.servers[serverKey].connection.transport.stderr.removeListener('data', stderrDataHandler);
+          }
+          
+          // Clear transport event handlers
+          if (this.servers[serverKey].connection?.transport) {
+            if (transportErrorHandler) {
+              this.servers[serverKey].connection.transport.onerror = undefined;
+            }
+            if (transportCloseHandler) {
+              this.servers[serverKey].connection.transport.onclose = undefined;
+            }
+          }
+        }
+        
         await this.servers[serverKey].connection?.transport.close();
         await this.servers[serverKey].connection?.client.close();
         delete this.servers[serverKey];
@@ -270,8 +317,31 @@ export class MCPService implements Resource {
     const serverKey = sanitizeString(`${name}-${existingServer.command}`);
     if (this.servers[serverKey]) {
       try {
+        // Clean up event listeners first
+        if (this.servers[serverKey].eventHandlers) {
+          const { stderrDataHandler, transportErrorHandler, transportCloseHandler } = this.servers[serverKey].eventHandlers;
+          
+          // Remove stderr data handler if it exists
+          if (stderrDataHandler && this.servers[serverKey].connection?.transport.stderr) {
+            this.servers[serverKey].connection.transport.stderr.removeListener('data', stderrDataHandler);
+          }
+          
+          // Clear transport event handlers
+          if (this.servers[serverKey].connection?.transport) {
+            if (transportErrorHandler) {
+              this.servers[serverKey].connection.transport.onerror = undefined;
+            }
+            if (transportCloseHandler) {
+              this.servers[serverKey].connection.transport.onclose = undefined;
+            }
+          }
+        }
+        
+        // Now close the transport and client
         await this.servers[serverKey].connection?.transport.close();
         await this.servers[serverKey].connection?.client.close();
+        
+        // Finally delete the server reference
         delete this.servers[serverKey];
       } catch (error) {
         log({ level: 'error', msg: `Error stopping server ${name}: ${error}` });
@@ -316,6 +386,26 @@ export class MCPService implements Resource {
     const serverKey = sanitizeString(`${name}-${server.command}`);
     if (this.servers[serverKey] && this.servers[serverKey].status !== 'disconnected') {
       try {
+        // Clean up event listeners first
+        if (this.servers[serverKey].eventHandlers) {
+          const { stderrDataHandler, transportErrorHandler, transportCloseHandler } = this.servers[serverKey].eventHandlers;
+          
+          // Remove stderr data handler if it exists
+          if (stderrDataHandler && this.servers[serverKey].connection?.transport.stderr) {
+            this.servers[serverKey].connection.transport.stderr.removeListener('data', stderrDataHandler);
+          }
+          
+          // Clear transport event handlers
+          if (this.servers[serverKey].connection?.transport) {
+            if (transportErrorHandler) {
+              this.servers[serverKey].connection.transport.onerror = undefined;
+            }
+            if (transportCloseHandler) {
+              this.servers[serverKey].connection.transport.onclose = undefined;
+            }
+          }
+        }
+        
         await this.servers[serverKey].connection?.transport.close();
         await this.servers[serverKey].connection?.client.close();
         this.servers[serverKey].status = 'disconnected';
@@ -334,6 +424,26 @@ export class MCPService implements Resource {
       const serverStatus = this.servers[serverKey].status
       if (serverStatus != 'disconnected') {
         try {
+          // Clean up event listeners first
+          if (this.servers[serverKey].eventHandlers) {
+            const { stderrDataHandler, transportErrorHandler, transportCloseHandler } = this.servers[serverKey].eventHandlers;
+            
+            // Remove stderr data handler if it exists
+            if (stderrDataHandler && this.servers[serverKey].connection?.transport.stderr) {
+              this.servers[serverKey].connection.transport.stderr.removeListener('data', stderrDataHandler);
+            }
+            
+            // Clear transport event handlers
+            if (this.servers[serverKey].connection?.transport) {
+              if (transportErrorHandler) {
+                this.servers[serverKey].connection.transport.onerror = undefined;
+              }
+              if (transportCloseHandler) {
+                this.servers[serverKey].connection.transport.onclose = undefined;
+              }
+            }
+          }
+          
           await this.servers[serverKey].connection?.transport.close()
           await this.servers[serverKey].connection?.client.close()
           this.servers[serverKey].status = 'disconnected'
@@ -341,7 +451,6 @@ export class MCPService implements Resource {
         } catch (error) {
           log({ level: 'error', msg: `${serverKey} error stopping: ${error}` })
         }
-
       }
     }
     await this.mcpDBClient.disconnect()

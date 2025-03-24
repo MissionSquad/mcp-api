@@ -128,6 +128,30 @@ Request body:
 GET /packages
 ```
 
+Response includes version information for each package:
+```json
+{
+  "success": true,
+  "packages": [
+    {
+      "name": "package-name",
+      "version": "1.0.0",
+      "latestVersion": "1.1.0",
+      "updateAvailable": true,
+      "installPath": "/path/to/package",
+      "status": "installed",
+      "installed": "2025-03-01T12:00:00Z",
+      "lastUpgraded": "2025-03-01T12:00:00Z",
+      "mcpServerId": "server-name",
+      "enabled": true
+    }
+  ]
+}
+```
+
+Optional query parameters:
+- `checkUpdates=true` - Check for updates before returning package information
+
 #### Get Package by Name
 
 ```
@@ -140,10 +164,86 @@ GET /packages/by-name/:name
 GET /packages/by-id/:name
 ```
 
+Both endpoints return version information and support the `checkUpdates=true` query parameter.
+
 #### Uninstall a Package
 
 ```
 DELETE /packages/:name
+```
+
+#### Check for Package Updates
+
+```
+GET /packages/updates
+```
+
+Optional query parameters:
+- `name=server-name` - Check for updates for a specific package
+
+Response:
+```json
+{
+  "success": true,
+  "updates": [
+    {
+      "serverName": "server-name",
+      "currentVersion": "1.0.0",
+      "latestVersion": "1.1.0",
+      "updateAvailable": true
+    }
+  ]
+}
+```
+
+#### Upgrade a Package
+
+```
+PUT /packages/:name/upgrade
+```
+
+Request body (optional):
+```json
+{
+  "version": "1.1.0"  // Optional, defaults to latest version
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "package": {
+    // Updated package information
+  },
+  "server": {
+    // Updated server information
+  }
+}
+```
+
+#### Upgrade All Packages
+
+```
+PUT /packages/upgrade-all
+```
+
+Response:
+```json
+{
+  "success": true,
+  "results": [
+    {
+      "serverName": "server-name",
+      "success": true
+    },
+    {
+      "serverName": "another-server",
+      "success": false,
+      "error": "Error message"
+    }
+  ]
+}
 ```
 
 ### MCP Tool Operations
