@@ -215,6 +215,12 @@ export class PackagesController implements Resource {
     this.app.delete('/packages/:name', this.uninstallPackage.bind(this))
     this.app.put('/packages/:name/enable', this.enablePackage.bind(this))
     this.app.put('/packages/:name/disable', this.disablePackage.bind(this))
+    
+    // New endpoints for package upgrades
+    this.app.get('/packages/updates', this.checkForUpdates.bind(this))
+    this.app.put('/packages/:name/upgrade', this.upgradePackage.bind(this))
+    this.app.put('/packages/upgrade-all', this.upgradeAllPackages.bind(this))
+    
     log({ level: 'info', msg: 'PackagesController routes registered' })
   }
   
@@ -256,6 +262,13 @@ export class PackagesController implements Resource {
   private async getPackages(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const packages = await this.packageService.getPackages()
+      
+      // Check for updates if requested
+      if (req.query.checkUpdates === 'true') {
+        log({ level: 'info', msg: 'Checking for updates for all packages' })
+        await this.packageService.checkForUpdates()
+      }
+      
       res.json({ success: true, packages })
     } catch (error: any) {
       res.status(500).json({ success: false, error: error.message })
@@ -272,6 +285,18 @@ export class PackagesController implements Resource {
         return
       }
       
+      // Check for updates if requested
+      if (req.query.checkUpdates === 'true' && packageInfo.mcpServerId) {
+        log({ level: 'info', msg: `Checking for updates for package ${name}` })
+        await this.packageService.checkForUpdates(packageInfo.mcpServerId)
+        // Refresh package info after update check
+        const updatedPackageInfo = await this.packageService.getPackage(name)
+        if (updatedPackageInfo) {
+          res.json({ success: true, package: updatedPackageInfo })
+          return
+        }
+      }
+      
       res.json({ success: true, package: packageInfo })
     } catch (error: any) {
       res.status(500).json({ success: false, error: error.message })
@@ -286,6 +311,18 @@ export class PackagesController implements Resource {
       if (!packageInfo) {
         res.status(404).json({ success: false, error: `Package ${name} not found` })
         return
+      }
+
+      // Check for updates if requested
+      if (req.query.checkUpdates === 'true' && packageInfo.mcpServerId) {
+        log({ level: 'info', msg: `Checking for updates for package ${packageInfo.name}` })
+        await this.packageService.checkForUpdates(packageInfo.mcpServerId)
+        // Refresh package info after update check
+        const updatedPackageInfo = await this.packageService.getPackageById(name)
+        if (updatedPackageInfo) {
+          res.json({ success: true, package: updatedPackageInfo })
+          return
+        }
       }
 
       res.json({ success: true, package: packageInfo })
@@ -342,6 +379,78 @@ export class PackagesController implements Resource {
       }
     } catch (error: any) {
       log({ level: 'error', msg: `Error disabling package ${req.params.name}: ${error.message}` })
+      res.status(500).json({ success: false, error: error.message })
+    }
+  }
+  
+  /**
+   * Check for available updates for packages
+   * @param req Express request
+   * @param res Express response
+   * @param next Express next function
+   */
+  private async checkForUpdates(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const serverName = req.query.name as string | undefined
+      log({ level: 'info', msg: `Checking for updates${serverName ? ` for ${serverName}` : ''}` })
+      
+      const updates = await this.packageService.checkForUpdates(serverName)
+      res.json({ success: true, ...updates })
+    } catch (error: any) {
+      log({ level: 'error', msg: `Error checking for updates: ${error.message}` })
+      res.status(500).json({ success: false, error: error.message })
+    }
+  }
+  
+  /**
+   * Upgrade a package to the latest version or a specified version
+   * @param req Express request
+   * @param res Express response
+   * @param next Express next function
+   */
+  private async upgradePackage(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const serverName = req.params.name
+      const version = req.body.version as string | undefined
+      
+      log({ level: 'info', msg: `Upgrading package ${serverName}${version ? ' to version ' + version : ''}` })
+      
+      const result = await this.packageService.upgradePackage(serverName, version)
+      if (result.success) {
+        res.json({ 
+          success: true, 
+          package: result.package, 
+          server: result.server 
+        })
+      } else {
+        res.status(400).json({ 
+          success: false, 
+          error: result.error 
+        })
+      }
+    } catch (error: any) {
+      log({ level: 'error', msg: `Error upgrading package: ${error.message}` })
+      res.status(500).json({ success: false, error: error.message })
+    }
+  }
+  
+  /**
+   * Upgrade all packages to their latest versions
+   * @param req Express request
+   * @param res Express response
+   * @param next Express next function
+   */
+  private async upgradeAllPackages(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      log({ level: 'info', msg: 'Upgrading all packages' })
+      
+      const result = await this.packageService.upgradeAllPackages()
+      res.json({ 
+        success: result.success, 
+        results: result.results 
+      })
+    } catch (error: any) {
+      log({ level: 'error', msg: `Error upgrading all packages: ${error.message}` })
       res.status(500).json({ success: false, error: error.message })
     }
   }

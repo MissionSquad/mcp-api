@@ -1,4 +1,4 @@
-import { base64ToObject, log, objectToBase64, retryWithExponentialBackoff, sanitizeString, sleep } from '../src/utils/general'
+import { base64ToObject, compareVersions, log, objectToBase64, retryWithExponentialBackoff, sanitizeString, sleep } from '../src/utils/general'
 import { SecretEncryptor } from '../src/utils/secretEncryptor'
 import * as crypto from 'crypto'
 
@@ -146,5 +146,68 @@ describe('utils', () => {
         expect(error).toBe('failed')
       })
     expect(count).toBe(4)
+  })
+})
+
+describe('compareVersions', () => {
+  it('should return 0 for equal versions', () => {
+    expect(compareVersions('1.0.0', '1.0.0')).toBe(0)
+    expect(compareVersions('2.3.4', '2.3.4')).toBe(0)
+    expect(compareVersions('0.0.0', '0.0.0')).toBe(0)
+  })
+
+  it('should return -1 when first version is less than second (major version)', () => {
+    expect(compareVersions('1.0.0', '2.0.0')).toBe(-1)
+    expect(compareVersions('1.5.2', '2.0.0')).toBe(-1)
+    expect(compareVersions('0.9.9', '1.0.0')).toBe(-1)
+  })
+
+  it('should return 1 when first version is greater than second (major version)', () => {
+    expect(compareVersions('2.0.0', '1.0.0')).toBe(1)
+    expect(compareVersions('2.0.0', '1.5.2')).toBe(1)
+    expect(compareVersions('1.0.0', '0.9.9')).toBe(1)
+  })
+
+  it('should return -1 when first version is less than second (minor version)', () => {
+    expect(compareVersions('1.0.0', '1.1.0')).toBe(-1)
+    expect(compareVersions('1.4.2', '1.5.0')).toBe(-1)
+    expect(compareVersions('2.0.0', '2.1.0')).toBe(-1)
+  })
+
+  it('should return 1 when first version is greater than second (minor version)', () => {
+    expect(compareVersions('1.1.0', '1.0.0')).toBe(1)
+    expect(compareVersions('1.5.0', '1.4.2')).toBe(1)
+    expect(compareVersions('2.1.0', '2.0.0')).toBe(1)
+  })
+
+  it('should return -1 when first version is less than second (patch version)', () => {
+    expect(compareVersions('1.0.0', '1.0.1')).toBe(-1)
+    expect(compareVersions('1.1.2', '1.1.3')).toBe(-1)
+    expect(compareVersions('2.2.4', '2.2.5')).toBe(-1)
+  })
+
+  it('should return 1 when first version is greater than second (patch version)', () => {
+    expect(compareVersions('1.0.1', '1.0.0')).toBe(1)
+    expect(compareVersions('1.1.3', '1.1.2')).toBe(1)
+    expect(compareVersions('2.2.5', '2.2.4')).toBe(1)
+  })
+
+  it('should handle versions with different length', () => {
+    expect(compareVersions('1.0', '1.0.0')).toBe(0)
+    expect(compareVersions('1', '1.0.0')).toBe(0)
+    expect(compareVersions('1.0.0', '1.0')).toBe(0)
+    expect(compareVersions('1.0.0', '1')).toBe(0)
+    
+    expect(compareVersions('1.0', '1.0.1')).toBe(-1)
+    expect(compareVersions('1', '1.0.1')).toBe(-1)
+    expect(compareVersions('1.0.1', '1.0')).toBe(1)
+    expect(compareVersions('1.0.1', '1')).toBe(1)
+  })
+
+  it('should handle complex version comparisons', () => {
+    expect(compareVersions('1.2.3', '1.2.3.4')).toBe(-1)
+    expect(compareVersions('1.2.3.4', '1.2.3')).toBe(1)
+    expect(compareVersions('10.2.3', '2.10.3')).toBe(1)
+    expect(compareVersions('0.10.0', '0.2.0')).toBe(1)
   })
 })
