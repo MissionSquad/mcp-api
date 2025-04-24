@@ -45,22 +45,26 @@ The system uses AES-256-GCM encryption for all stored secrets, with a separate e
 ### Setup
 
 1. Clone the repository:
+
    ```bash
    git clone https://github.com/missionsquad/mcp-api.git
    cd mcp-api
    ```
 
 2. Install dependencies:
+
    ```bash
    yarn install
    ```
 
 3. Create a `.env` file based on the example:
+
    ```bash
    cp env.example .env
    ```
 
 4. Configure your environment variables:
+
    ```
    PORT=8080
    MONGO_USER=username
@@ -72,6 +76,7 @@ The system uses AES-256-GCM encryption for all stored secrets, with a separate e
    ```
 
 5. Build the project:
+
    ```bash
    yarn build
    ```
@@ -109,14 +114,16 @@ POST /packages/install
 ```
 
 Request body:
+
 ```json
 {
   "name": "package-name",
-  "version": "1.0.0",  // Optional, defaults to "latest"
+  "version": "1.0.0", // Optional, defaults to "latest"
   "serverName": "unique-server-name",
-  "command": "node",  // Optional, auto-detected if not provided
-  "args": ["--option1", "--option2"],  // Optional
-  "env": {  // Optional
+  "command": "node", // Optional, auto-detected if not provided
+  "args": ["--option1", "--option2"], // Optional
+  "env": {
+    // Optional
     "NODE_ENV": "production"
   }
 }
@@ -129,6 +136,7 @@ GET /packages
 ```
 
 Response includes version information for each package:
+
 ```json
 {
   "success": true,
@@ -150,6 +158,7 @@ Response includes version information for each package:
 ```
 
 Optional query parameters:
+
 - `checkUpdates=true` - Check for updates before returning package information
 
 #### Get Package by Name
@@ -179,9 +188,11 @@ GET /packages/updates
 ```
 
 Optional query parameters:
+
 - `name=server-name` - Check for updates for a specific package
 
 Response:
+
 ```json
 {
   "success": true,
@@ -203,13 +214,15 @@ PUT /packages/:name/upgrade
 ```
 
 Request body (optional):
+
 ```json
 {
-  "version": "1.1.0"  // Optional, defaults to latest version
+  "version": "1.1.0" // Optional, defaults to latest version
 }
 ```
 
 Response:
+
 ```json
 {
   "success": true,
@@ -229,6 +242,7 @@ PUT /packages/upgrade-all
 ```
 
 Response:
+
 ```json
 {
   "success": true,
@@ -250,16 +264,80 @@ Response:
 
 > **Note**: The `username` parameter is optional in all API endpoints. If omitted, "default" will be used. This allows single users to use the API without specifying a username while still benefiting from encrypted secret storage.
 
+#### List Available MCP Tools
+
+```
+GET /mcp/tools
+```
+
+Returns a list of all available tools across all registered MCP servers, including their names, descriptions, and input schemas.
+
+Response format:
+
+```json
+{
+  "success": true,
+  "tools": [
+    {
+      "server-name": [
+        {
+          "name": "tool-name",
+          "description": "A human-readable description of what the tool does",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "param1": {
+                "type": "string",
+                "description": "Description of parameter 1"
+              },
+              "param2": {
+                "type": "number",
+                "description": "Description of parameter 2"
+              },
+              "param3": {
+                "type": "object",
+                "properties": {
+                  "nestedParam": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "required": ["param1"]
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+The response structure contains:
+
+- `success`: Boolean indicating if the request was successful
+- `tools`: An array of objects, each containing a server name as the key and an array of tool definitions as the value
+  - Each tool definition includes:
+    - `name`: The name of the tool (used when calling the tool)
+    - `description`: A human-readable description of the tool's functionality
+    - `inputSchema`: A JSON Schema object defining the expected parameters for the tool
+      - `properties`: Defines the parameters the tool accepts
+      - `required`: An array of parameter names that are required
+
+This endpoint is useful for discovering what tools are available and understanding their input requirements before making tool calls.
+
 #### Call an MCP Tool
 
 ```
 POST /mcp/tool/call
 ```
 
+Executes a tool on a specified MCP server with the provided arguments.
+
 Request body:
+
 ```json
 {
-  "username": "user123",  // Optional, defaults to "default"
+  "username": "user123", // Optional, defaults to "default"
   "serverName": "mcp-github",
   "methodName": "create_issue",
   "args": {
@@ -271,19 +349,253 @@ Request body:
 }
 ```
 
+Parameters:
+
+- `username`: (Optional) The username to use for retrieving secrets. Defaults to "default" if not provided.
+- `serverName`: (Required) The name of the MCP server that provides the tool.
+- `methodName`: (Required) The name of the tool to call.
+- `args`: (Required) An object containing the arguments to pass to the tool.
+
+Response format:
+
+```json
+{
+  "success": true,
+  "data": {
+    "content": "Tool execution result",
+    "contentType": "text/plain"
+  }
+}
+```
+
+The response structure contains:
+
+- `success`: Boolean indicating if the request was successful
+- `data`: The result of the tool execution
+  - `content`: The actual result data (can be a string, object, or array)
+  - `contentType`: The MIME type of the content (e.g., "text/plain", "application/json")
+
+Error response:
+
+```json
+{
+  "success": false,
+  "error": "Error message"
+}
+```
+
+##### Secret Handling
+
+A key feature of the `/mcp/tool/call` endpoint is automatic secret injection:
+
+1. When a tool call is made, the system automatically retrieves any stored secrets for the specified username and server
+2. These secrets are merged with the provided arguments before the tool is called
+3. This means sensitive information like API keys or passwords don't need to be included in the request payload
+
+For example, if you've previously stored a GitHub token using the `/secrets/set` endpoint:
+
+```json
+{
+  "username": "user123",
+  "serverName": "mcp-github",
+  "secretName": "GITHUB_TOKEN",
+  "secretValue": "ghp_xxxxxxxxxxxx"
+}
+```
+
+Then when calling a GitHub tool, you don't need to include the token in your request:
+
+```json
+{
+  "username": "user123",
+  "serverName": "mcp-github",
+  "methodName": "create_issue",
+  "args": {
+    "owner": "username",
+    "repo": "repo-name",
+    "title": "Issue title",
+    "body": "Issue description"
+  }
+}
+```
+
+The system will automatically inject the `GITHUB_TOKEN` into the arguments before calling the tool.
+
+This approach provides several benefits:
+
+- Clients don't need to manage or expose sensitive credentials in their requests
+- Each user can have their own set of secrets for the same MCP servers
+- Secrets are stored securely (encrypted) and only decrypted when needed
+
 #### List Available MCP Servers
 
 ```
 GET /mcp/servers
 ```
 
-#### List Available MCP Tools
+Returns a list of all registered MCP servers with their configuration and status information.
 
+Response format:
+
+```json
+{
+  "success": true,
+  "servers": [
+    {
+      "name": "mcp-github",
+      "command": "./node_modules/@missionsquad/mcp-github/build/index.js",
+      "args": ["--port", "3000"],
+      "env": {
+        "NODE_ENV": "production"
+      },
+      "status": "connected",
+      "enabled": true,
+      "toolsList": [
+        {
+          "name": "create_issue",
+          "description": "Creates a new issue in a GitHub repository",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string",
+                "description": "Repository owner"
+              },
+              "repo": {
+                "type": "string",
+                "description": "Repository name"
+              },
+              "title": {
+                "type": "string",
+                "description": "Issue title"
+              },
+              "body": {
+                "type": "string",
+                "description": "Issue body"
+              },
+              "labels": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Labels to apply to the issue"
+              },
+              "assignees": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Users to assign to the issue"
+              }
+            },
+            "required": ["owner", "repo", "title"]
+          }
+        }
+      ],
+      "errors": []
+    }
+  ]
+}
 ```
-GET /mcp/tools
-```
+
+The response structure contains:
+
+- `success`: Boolean indicating if the request was successful
+- `servers`: An array of server objects, each containing:
+  - `name`: The unique name of the MCP server
+  - `command`: The command used to start the server
+  - `args`: Command-line arguments passed to the server
+  - `env`: Environment variables set for the server (excluding secrets)
+  - `status`: Current connection status ("connected", "connecting", "disconnected", or "error")
+  - `enabled`: Whether the server is enabled
+  - `toolsList`: Array of tools provided by this server (same format as in `/mcp/tools` response)
+  - `errors`: Array of error messages if the server encountered any issues
+
+This endpoint is useful for monitoring the status of all MCP servers and understanding their configurations.
 
 ### MCP Server Management
+
+#### Get a Specific MCP Server
+
+```
+GET /mcp/servers/:name
+```
+
+Retrieves detailed information about a specific MCP server.
+
+Parameters:
+
+- `name`: (Required) The name of the MCP server to retrieve
+
+Response format:
+
+```json
+{
+  "success": true,
+  "server": {
+    "name": "mcp-github",
+    "command": "./node_modules/@missionsquad/mcp-github/build/index.js",
+    "args": ["--port", "3000"],
+    "env": {
+      "NODE_ENV": "production"
+    },
+    "status": "connected",
+    "enabled": true,
+    "toolsList": [
+      {
+        "name": "create_issue",
+        "description": "Creates a new issue in a GitHub repository",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "owner": {
+              "type": "string",
+              "description": "Repository owner"
+            },
+            "repo": {
+              "type": "string",
+              "description": "Repository name"
+            },
+            "title": {
+              "type": "string",
+              "description": "Issue title"
+            },
+            "body": {
+              "type": "string",
+              "description": "Issue body"
+            },
+            "labels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Labels to apply to the issue"
+            },
+            "assignees": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Users to assign to the issue"
+            }
+          },
+          "required": ["owner", "repo", "title"]
+        }
+      }
+    ],
+    "errors": []
+  }
+}
+```
+
+Error response (server not found):
+
+```json
+{
+  "success": false,
+  "error": "Server mcp-github not found"
+}
+```
 
 #### Add a New MCP Server
 
@@ -291,15 +603,55 @@ GET /mcp/tools
 POST /mcp/servers
 ```
 
+Registers a new MCP server with the system.
+
 Request body:
+
 ```json
 {
   "name": "helper-tools",
   "command": "./node_modules/@missionsquad/mcp-helper-tools/build/index.js",
-  "args": ["--option1", "--option2"],  // Optional
-  "env": {  // Optional
+  "args": ["--option1", "--option2"], // Optional
+  "env": {
+    // Optional
     "NODE_ENV": "production"
+  },
+  "enabled": true // Optional, defaults to true
+}
+```
+
+Parameters:
+
+- `name`: (Required) A unique name for the MCP server
+- `command`: (Required) The command to execute to start the MCP server
+- `args`: (Optional) An array of command-line arguments to pass to the server
+- `env`: (Optional) An object containing environment variables to set for the server
+- `enabled`: (Optional) Whether the server should be enabled immediately (defaults to true)
+
+Response format:
+
+```json
+{
+  "success": true,
+  "server": {
+    "name": "helper-tools",
+    "command": "./node_modules/@missionsquad/mcp-helper-tools/build/index.js",
+    "args": ["--option1", "--option2"],
+    "env": {
+      "NODE_ENV": "production"
+    },
+    "status": "connected",
+    "enabled": true
   }
+}
+```
+
+Error response (server already exists):
+
+```json
+{
+  "success": false,
+  "error": "Server with name helper-tools already exists"
 }
 ```
 
@@ -311,16 +663,60 @@ Request body:
 PUT /mcp/servers/:name
 ```
 
+Updates the configuration of an existing MCP server.
+
+Parameters:
+
+- `name`: (Required) The name of the MCP server to update
+
 Request body:
+
 ```json
 {
-  "command": "./updated/path/to/server.js",  // Optional
-  "args": ["--new-option"],  // Optional
-  "env": {  // Optional
+  "command": "./updated/path/to/server.js", // Optional
+  "args": ["--new-option"], // Optional
+  "env": {
+    // Optional
     "NODE_ENV": "development"
+  },
+  "enabled": false // Optional
+}
+```
+
+All fields in the request body are optional. Only the fields that are provided will be updated.
+
+Response format:
+
+```json
+{
+  "success": true,
+  "server": {
+    "name": "helper-tools",
+    "command": "./updated/path/to/server.js",
+    "args": ["--new-option"],
+    "env": {
+      "NODE_ENV": "development"
+    },
+    "status": "disconnected",
+    "enabled": false
   }
 }
 ```
+
+Error response (server not found):
+
+```json
+{
+  "success": false,
+  "error": "Server with name helper-tools not found"
+}
+```
+
+When a server configuration is updated, the system will:
+
+1. Stop the server if it's running
+2. Update the configuration in the database
+3. Restart the server with the new configuration (unless `enabled` is set to `false`)
 
 #### Delete an MCP Server
 
@@ -328,11 +724,34 @@ Request body:
 DELETE /mcp/servers/:name
 ```
 
-#### Get a Specific MCP Server
+Removes an MCP server from the system.
 
+Parameters:
+
+- `name`: (Required) The name of the MCP server to delete
+
+Response format:
+
+```json
+{
+  "success": true
+}
 ```
-GET /mcp/servers/:name
+
+Error response (server not found):
+
+```json
+{
+  "success": false,
+  "error": "Server with name helper-tools not found"
+}
 ```
+
+When a server is deleted, the system will:
+
+1. Stop the server if it's running
+2. Remove the server configuration from the database
+3. Clean up any resources associated with the server
 
 #### Enable an MCP Server
 
@@ -342,6 +761,42 @@ PUT /mcp/servers/:name/enable
 
 Enables a previously disabled MCP server.
 
+Parameters:
+
+- `name`: (Required) The name of the MCP server to enable
+
+Response format:
+
+```json
+{
+  "success": true,
+  "server": {
+    "name": "helper-tools",
+    "command": "./node_modules/@missionsquad/mcp-helper-tools/build/index.js",
+    "args": ["--option1", "--option2"],
+    "env": {
+      "NODE_ENV": "production"
+    },
+    "status": "connected",
+    "enabled": true
+  }
+}
+```
+
+Error response (server not found):
+
+```json
+{
+  "success": false,
+  "error": "Server helper-tools not found"
+}
+```
+
+When a server is enabled, the system will:
+
+1. Update the `enabled` flag in the database
+2. Start the server if it's not already running
+
 #### Disable an MCP Server
 
 ```
@@ -349,6 +804,44 @@ PUT /mcp/servers/:name/disable
 ```
 
 Disables an MCP server without removing it from the system.
+
+Parameters:
+
+- `name`: (Required) The name of the MCP server to disable
+
+Response format:
+
+```json
+{
+  "success": true,
+  "server": {
+    "name": "helper-tools",
+    "command": "./node_modules/@missionsquad/mcp-helper-tools/build/index.js",
+    "args": ["--option1", "--option2"],
+    "env": {
+      "NODE_ENV": "production"
+    },
+    "status": "disconnected",
+    "enabled": false
+  }
+}
+```
+
+Error response (server not found):
+
+```json
+{
+  "success": false,
+  "error": "Server helper-tools not found"
+}
+```
+
+When a server is disabled, the system will:
+
+1. Update the `enabled` flag in the database
+2. Stop the server if it's running
+
+Disabling a server is useful when you want to temporarily stop a server without losing its configuration.
 
 ### Secret Management
 
@@ -358,15 +851,51 @@ Disables an MCP server without removing it from the system.
 POST /secrets/set
 ```
 
+Stores a secret value for a specific user and MCP server. The secret is encrypted before being stored in the database.
+
 Request body:
+
 ```json
 {
-  "username": "user123",  // Optional, defaults to "default"
+  "username": "user123", // Optional, defaults to "default"
   "serverName": "mcp-github",
   "secretName": "GITHUB_TOKEN",
   "secretValue": "ghp_xxxxxxxxxxxx"
 }
 ```
+
+Parameters:
+
+- `username`: (Optional) The username to associate the secret with. Defaults to "default" if not provided.
+- `serverName`: (Required) The name of the MCP server that will use this secret.
+- `secretName`: (Required) The name of the secret (e.g., "API_KEY", "PASSWORD").
+- `secretValue`: (Required) The actual secret value to store.
+
+Response format:
+
+```json
+{
+  "success": true
+}
+```
+
+Error response:
+
+```json
+{
+  "success": false,
+  "error": "Error message"
+}
+```
+
+When a secret is set:
+
+1. The system checks if the specified server exists
+2. The secret value is encrypted using AES-256-GCM encryption
+3. The encrypted secret is stored in the database, associated with the specified username and server
+4. If a secret with the same name already exists for this user and server, it is overwritten
+
+Secrets set with this endpoint are automatically injected into tool calls made with the `/mcp/tool/call` endpoint when the same username and server name are specified.
 
 #### Delete a Secret
 
@@ -374,14 +903,58 @@ Request body:
 POST /secrets/delete
 ```
 
+Removes a stored secret for a specific user and MCP server.
+
 Request body:
+
 ```json
 {
-  "username": "user123",  // Optional, defaults to "default"
+  "username": "user123", // Optional, defaults to "default"
   "serverName": "mcp-github",
   "secretName": "GITHUB_TOKEN"
 }
 ```
+
+Parameters:
+
+- `username`: (Optional) The username associated with the secret. Defaults to "default" if not provided.
+- `serverName`: (Required) The name of the MCP server the secret is associated with.
+- `secretName`: (Required) The name of the secret to delete.
+
+Response format:
+
+```json
+{
+  "success": true
+}
+```
+
+Error response:
+
+```json
+{
+  "success": false,
+  "error": "Error message"
+}
+```
+
+When a secret is deleted:
+
+1. The system locates the secret in the database based on the username, server name, and secret name
+2. The secret is permanently removed from the database
+3. Future tool calls will no longer have this secret automatically injected
+
+#### Secret Security Model
+
+The MCP API implements a robust security model for handling secrets:
+
+1. **Encryption at Rest**: All secrets are encrypted using AES-256-GCM before being stored in the database.
+2. **User Isolation**: Each user's secrets are stored separately, allowing multiple users to use the same MCP servers with different credentials.
+3. **Just-in-Time Decryption**: Secrets are only decrypted when needed for a specific tool call and are never stored in plaintext in memory for longer than necessary.
+4. **Transparent Injection**: Secrets are automatically injected into tool calls, so clients don't need to handle or expose sensitive information in their requests.
+5. **No Secret Enumeration**: There is no API endpoint to list all secrets, reducing the risk of information disclosure.
+
+This approach allows for secure multi-user access to shared MCP server instances while maintaining strong isolation between users' credentials.
 
 ## Security Considerations
 
@@ -407,6 +980,7 @@ This project is a work in progress and will improve over time. Contributions are
 - Share your feedback and suggestions
 
 We're particularly interested in:
+
 - Enhancing security features
 - Improving performance and scalability
 - Adding support for additional MCP server types

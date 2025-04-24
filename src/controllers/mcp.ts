@@ -42,12 +42,12 @@ export interface UpdateServerRequest {
 export class MCPController implements Resource {
   private app: Express
   private mcpService: MCPService
-  
-  constructor({ app, mongoParams }: { app: Express, mongoParams: MongoConnectionParams }) {
+
+  constructor({ app, mongoParams }: { app: Express; mongoParams: MongoConnectionParams }) {
     this.app = app
     this.mcpService = new MCPService({ mongoParams })
   }
-  
+
   /**
    * Get the MCP service instance
    * @returns The MCP service instance
@@ -76,10 +76,19 @@ export class MCPController implements Resource {
 
   private getServers(req: Request, res: Response, next: NextFunction): void {
     try {
-      const servers = Object.values(this.mcpService.servers)
-        .map(({ name, command, args, env, status, enabled, toolsList, errors }) => 
-          ({ name, command, args, env, status, enabled, toolsList, errors }))
-      log({ level: 'info', msg: 'sending servers list'})
+      const servers = Object.values(this.mcpService.servers).map(
+        ({ name, command, args, env, status, enabled, toolsList, logs }) => ({
+          name,
+          command,
+          args,
+          env,
+          status,
+          enabled,
+          toolsList,
+          logs
+        })
+      )
+      log({ level: 'info', msg: 'sending servers list' })
       res.json({ success: true, servers })
     } catch (error) {
       res.status(500).json({ success: false, error: (error as Error).message })
@@ -88,8 +97,12 @@ export class MCPController implements Resource {
 
   private getTools(req: Request, res: Response, next: NextFunction): void {
     try {
+      // Filter to only include enabled servers before mapping tools
       const tools = Object.values(this.mcpService.servers)
-        .map(({ name, toolsList }) => ({ [`${name}`]: [ ...toolsList ?? [] ] }))
+        .filter(server => server.enabled)
+        .map(({ name, toolsList }) => ({
+          [`${name}`]: [...(toolsList ?? [])]
+        }))
       log({ level: 'info', msg: 'sending tools list' })
       res.json({ success: true, tools })
     } catch (error) {
@@ -102,7 +115,10 @@ export class MCPController implements Resource {
       const body = req.body as ToolCallRequest
       const { serverName, methodName, args } = body
       const username = body.username ?? 'default'
-      log({ level: 'info', msg: `calling tool ${methodName} on server ${serverName} with args ${JSON.stringify(args)}` })
+      log({
+        level: 'info',
+        msg: `calling tool ${methodName} on server ${serverName} with args ${JSON.stringify(args)}`
+      })
       const result = await this.mcpService.callTool(username, serverName, methodName, args)
       res.json({ success: true, data: result })
     } catch (error) {

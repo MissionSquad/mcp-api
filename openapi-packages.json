@@ -1,0 +1,850 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Package Controller API",
+    "version": "1.0.0",
+    "description": "API endpoints for managing packages and their associated servers."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Default server"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Packages",
+      "description": "Operations related to package installation, management, and updates."
+    }
+  ],
+  "paths": {
+    "/packages/install": {
+      "post": {
+        "tags": ["Packages"],
+        "summary": "Install Package",
+        "description": "Installs a new package and configures its associated server.",
+        "operationId": "installPackage",
+        "requestBody": {
+          "description": "Package installation details",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallPackageRequest"
+              },
+              "examples": {
+                "installOpenAI": {
+                  "summary": "Example install request",
+                  "value": {
+                    "name": "openai-mcp",
+                    "serverName": "openai",
+                    "version": "1.0.0",
+                    "enabled": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Package installed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallSuccessResponse"
+                },
+                "examples": {
+                  "success": {
+                    "summary": "Successful installation response",
+                    "value": {
+                      "success": true,
+                      "package": {
+                        "name": "openai-mcp",
+                        "version": "1.0.0",
+                        "installPath": "packages/openai-mcp",
+                        "status": "installed",
+                        "installed": "2025-04-17T22:25:30.000Z",
+                        "mcpServerId": "openai",
+                        "enabled": true
+                      },
+                      "server": {
+                        "name": "openai",
+                        "command": "node",
+                        "args": ["./packages/openai-mcp/node_modules/openai-mcp/index.js"],
+                        "env": {},
+                        "status": "connected",
+                        "enabled": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/packages": {
+      "get": {
+        "tags": ["Packages"],
+        "summary": "Get All Packages",
+        "description": "Retrieves a list of all installed packages, optionally checking for updates.",
+        "operationId": "getAllPackages",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CheckUpdatesQueryParam"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of installed packages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackageListResponse"
+                },
+                "examples": {
+                  "success": {
+                    "summary": "Example list of packages",
+                    "value": {
+                      "success": true,
+                      "packages": [
+                        {
+                          "name": "openai-mcp",
+                          "version": "1.0.0",
+                          "latestVersion": "1.1.0",
+                          "updateAvailable": true,
+                          "installPath": "packages/openai-mcp",
+                          "status": "installed",
+                          "installed": "2025-04-17T22:25:30.000Z",
+                          "mcpServerId": "openai",
+                          "enabled": true
+                        },
+                        {
+                          "name": "github-mcp",
+                          "version": "0.5.0",
+                          "latestVersion": "0.5.0",
+                          "updateAvailable": false,
+                          "installPath": "packages/github-mcp",
+                          "status": "installed",
+                          "installed": "2025-04-17T22:25:30.000Z",
+                          "mcpServerId": "github",
+                          "enabled": true
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/packages/by-name/{name}": {
+      "get": {
+        "tags": ["Packages"],
+        "summary": "Get Package by Name",
+        "description": "Retrieves details for a specific package using its repository name, optionally checking for updates.",
+        "operationId": "getPackageByName",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PackageNamePathParam"
+          },
+          {
+            "$ref": "#/components/parameters/CheckUpdatesQueryParam"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Package details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetPackageSuccessResponse"
+                },
+                "examples": {
+                  "success": {
+                    "summary": "Example package details",
+                    "value": {
+                      "success": true,
+                      "package": {
+                        "name": "openai-mcp",
+                        "version": "1.0.0",
+                        "latestVersion": "1.1.0",
+                        "updateAvailable": true,
+                        "installPath": "packages/openai-mcp",
+                        "status": "installed",
+                        "installed": "2025-04-17T22:25:30.000Z",
+                        "mcpServerId": "openai",
+                        "enabled": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/packages/by-id/{name}": {
+      "get": {
+        "tags": ["Packages"],
+        "summary": "Get Package by ID (Server Name)",
+        "description": "Retrieves details for a specific package using its assigned server name (mcpServerId), optionally checking for updates.",
+        "operationId": "getPackageById",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ServerNamePathParam"
+          },
+          {
+            "$ref": "#/components/parameters/CheckUpdatesQueryParam"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Package details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetPackageSuccessResponse"
+                },
+                 "examples": {
+                  "success": {
+                    "summary": "Example package details",
+                    "value": {
+                      "success": true,
+                      "package": {
+                        "name": "openai-mcp",
+                        "version": "1.0.0",
+                        "latestVersion": "1.1.0",
+                        "updateAvailable": true,
+                        "installPath": "packages/openai-mcp",
+                        "status": "installed",
+                        "installed": "2025-04-17T22:25:30.000Z",
+                        "mcpServerId": "openai",
+                        "enabled": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/packages/{name}": {
+      "delete": {
+        "tags": ["Packages"],
+        "summary": "Uninstall Package",
+        "description": "Uninstalls a package identified by its server name (mcpServerId).",
+        "operationId": "uninstallPackage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ServerNamePathParam"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Package uninstalled successfully",
+             "content": {
+               "application/json": {
+                 "schema": {
+                    "$ref": "#/components/schemas/SimpleSuccessResponse"
+                  },
+                 "examples": {
+                    "success": {
+                      "summary": "Successful uninstall",
+                      "value": { "success": true }
+                    }
+                 }
+               }
+             }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/packages/{name}/enable": {
+      "put": {
+        "tags": ["Packages"],
+        "summary": "Enable Package",
+        "description": "Enables the server associated with a package identified by its server name (mcpServerId).",
+        "operationId": "enablePackage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ServerNamePathParam"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Package enabled successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnableDisableSuccessResponse"
+                },
+                "examples": {
+                  "success": {
+                    "summary": "Successful enable response",
+                    "value": {
+                      "success": true,
+                      "server": {
+                        "name": "openai",
+                        "command": "node",
+                        "args": ["./packages/openai-mcp/node_modules/openai-mcp/index.js"],
+                        "env": {},
+                        "status": "connected",
+                        "enabled": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/packages/{name}/disable": {
+      "put": {
+        "tags": ["Packages"],
+        "summary": "Disable Package",
+        "description": "Disables the server associated with a package identified by its server name (mcpServerId).",
+        "operationId": "disablePackage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ServerNamePathParam"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Package disabled successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnableDisableSuccessResponse"
+                },
+                "examples": {
+                  "success": {
+                    "summary": "Successful disable response",
+                    "value": {
+                      "success": true,
+                      "server": {
+                        "name": "openai",
+                        "command": "node",
+                        "args": ["./packages/openai-mcp/node_modules/openai-mcp/index.js"],
+                        "env": {},
+                        "status": "disconnected",
+                        "enabled": false
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/packages/updates": {
+      "get": {
+        "tags": ["Packages"],
+        "summary": "Check for Updates",
+        "description": "Checks for available updates for one or all installed packages.",
+        "operationId": "checkUpdates",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Server name (mcpServerId) to check for updates. If omitted, checks all packages.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Update check results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateCheckResponse"
+                },
+                "examples": {
+                  "success": {
+                    "summary": "Example update check result",
+                    "value": {
+                      "success": true,
+                      "updates": [
+                        {
+                          "serverName": "openai",
+                          "currentVersion": "1.0.0",
+                          "latestVersion": "1.1.0",
+                          "updateAvailable": true
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/packages/{name}/upgrade": {
+      "put": {
+        "tags": ["Packages"],
+        "summary": "Upgrade Package",
+        "description": "Upgrades a specific package (identified by server name) to the latest or a specified version.",
+        "operationId": "upgradePackage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ServerNamePathParam"
+          }
+        ],
+        "requestBody": {
+          "description": "Optional version to upgrade to.",
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpgradePackageRequest"
+              },
+              "examples": {
+                "specifyVersion": {
+                  "summary": "Upgrade to a specific version",
+                  "value": {
+                    "version": "1.1.0"
+                  }
+                },
+                "latestVersion": {
+                    "summary": "Upgrade to the latest version",
+                    "value": {}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Package upgraded successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeSuccessResponse"
+                },
+                "examples": {
+                  "success": {
+                    "summary": "Successful upgrade response",
+                    "value": {
+                      "success": true,
+                      "package": {
+                        "name": "openai-mcp",
+                        "version": "1.1.0",
+                        "latestVersion": "1.1.0",
+                        "updateAvailable": false,
+                        "installPath": "packages/openai-mcp",
+                        "status": "installed",
+                        "installed": "2025-04-17T22:25:30.000Z",
+                        "lastUpgraded": "2025-04-17T22:30:00.000Z",
+                        "mcpServerId": "openai",
+                        "enabled": true
+                      },
+                      "server": {
+                        "name": "openai",
+                        "command": "node",
+                        "args": ["./packages/openai-mcp/node_modules/openai-mcp/index.js"],
+                        "env": {},
+                        "status": "connected",
+                        "enabled": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/packages/upgrade-all": {
+      "put": {
+        "tags": ["Packages"],
+        "summary": "Upgrade All Packages",
+        "description": "Attempts to upgrade all installed packages that have available updates.",
+        "operationId": "upgradeAllPackages",
+        "responses": {
+          "200": {
+            "description": "Upgrade process completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeAllResponse"
+                },
+                "examples": {
+                  "success": {
+                    "summary": "Example upgrade all result",
+                    "value": {
+                      "success": true,
+                      "results": [
+                        {
+                          "serverName": "openai",
+                          "success": true
+                        },
+                        {
+                          "serverName": "github",
+                          "success": true
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "PackageInfo": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Package repository name"
+          },
+          "version": {
+            "type": "string",
+            "description": "Currently installed version"
+          },
+          "latestVersion": {
+            "type": "string",
+            "description": "Latest available version (if checked)"
+          },
+          "updateAvailable": {
+            "type": "boolean",
+            "description": "Whether an update is available (if checked)"
+          },
+          "installPath": {
+            "type": "string",
+            "description": "Path where the package is installed"
+          },
+          "status": {
+            "type": "string",
+            "description": "Installation status",
+             "enum": ["installed", "installing", "uninstalled", "error"]
+          },
+          "installed": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp of initial installation"
+          },
+           "lastUpgraded": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp of the last upgrade"
+          },
+          "mcpServerId": {
+            "type": "string",
+            "description": "Assigned server name (ID)"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the associated server is enabled"
+          }
+        },
+        "required": ["name", "version", "installPath", "status", "installed", "mcpServerId", "enabled"]
+      },
+      "ServerInfo": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Assigned server name (ID)"
+          },
+          "command": {
+            "type": "string",
+            "description": "Command used to run the server"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Arguments passed to the command"
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Environment variables for the server process"
+          },
+          "status": {
+            "type": "string",
+            "description": "Current status of the server process",
+            "enum": ["connected", "disconnected", "starting", "stopping", "error"]
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the server is configured to be enabled"
+          }
+        },
+         "required": ["name", "command", "args", "env", "status", "enabled"]
+      },
+      "InstallPackageRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Package repository name"
+          },
+          "serverName": {
+            "type": "string",
+            "description": "Name to assign to the server"
+          },
+          "version": {
+            "type": "string",
+            "description": "Specific version to install (optional, defaults to latest)"
+          },
+          "command": {
+            "type": "string",
+            "description": "Custom command to run the server (optional)"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Array of arguments for the command (optional)"
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Environment variables (optional)"
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether the server should be enabled after installation (optional, defaults to true)"
+          }
+        },
+        "required": ["name", "serverName"]
+      },
+      "UpgradePackageRequest": {
+        "type": "object",
+        "properties": {
+           "version": {
+            "type": "string",
+            "description": "Specific version to upgrade to (optional, defaults to latest)"
+           }
+        }
+      },
+      "InstallSuccessResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean", "example": true },
+          "package": { "$ref": "#/components/schemas/PackageInfo" },
+          "server": { "$ref": "#/components/schemas/ServerInfo" }
+        },
+         "required": ["success", "package", "server"]
+      },
+       "UpgradeSuccessResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean", "example": true },
+          "package": { "$ref": "#/components/schemas/PackageInfo" },
+          "server": { "$ref": "#/components/schemas/ServerInfo" }
+        },
+         "required": ["success", "package", "server"]
+      },
+      "PackageListResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean", "example": true },
+          "packages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PackageInfo"
+            }
+          }
+        },
+        "required": ["success", "packages"]
+      },
+      "GetPackageSuccessResponse": {
+          "type": "object",
+          "properties": {
+            "success": { "type": "boolean", "example": true },
+            "package": { "$ref": "#/components/schemas/PackageInfo" }
+          },
+          "required": ["success", "package"]
+      },
+      "EnableDisableSuccessResponse": {
+          "type": "object",
+          "properties": {
+            "success": { "type": "boolean", "example": true },
+            "server": { "$ref": "#/components/schemas/ServerInfo" }
+          },
+          "required": ["success", "server"]
+      },
+      "UpdateCheckInfo": {
+          "type": "object",
+          "properties": {
+             "serverName": { "type": "string", "description": "Server name (mcpServerId)" },
+             "currentVersion": { "type": "string", "description": "Currently installed version" },
+             "latestVersion": { "type": "string", "description": "Latest available version" },
+             "updateAvailable": { "type": "boolean", "description": "Whether an update is available" }
+          },
+          "required": ["serverName", "currentVersion", "latestVersion", "updateAvailable"]
+      },
+      "UpdateCheckResponse": {
+        "type": "object",
+        "properties": {
+            "success": { "type": "boolean", "example": true },
+            "updates": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/UpdateCheckInfo" }
+            }
+        },
+        "required": ["success", "updates"]
+      },
+       "UpgradeAllResult": {
+          "type": "object",
+          "properties": {
+             "serverName": { "type": "string", "description": "Server name (mcpServerId)" },
+             "success": { "type": "boolean", "description": "Whether the upgrade attempt was successful" },
+             "error": { "type": "string", "description": "Error message if upgrade failed" }
+          },
+          "required": ["serverName", "success"]
+      },
+       "UpgradeAllResponse": {
+        "type": "object",
+        "properties": {
+            "success": { "type": "boolean", "example": true },
+            "results": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/UpgradeAllResult" }
+            }
+        },
+        "required": ["success", "results"]
+      },
+      "SimpleSuccessResponse": {
+          "type": "object",
+          "properties": {
+              "success": { "type": "boolean", "example": true }
+          },
+          "required": ["success"]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean", "example": false },
+          "error": { "type": "string", "description": "Error message detailing the issue" }
+        },
+        "required": ["success", "error"]
+      }
+    },
+    "parameters": {
+      "CheckUpdatesQueryParam": {
+        "name": "checkUpdates",
+        "in": "query",
+        "description": "Set to true to check for package updates",
+        "required": false,
+        "schema": {
+          "type": "boolean"
+        },
+        "example": true
+      },
+      "PackageNamePathParam": {
+         "name": "name",
+         "in": "path",
+         "description": "Package repository name",
+         "required": true,
+         "schema": {
+            "type": "string"
+         },
+         "example": "openai-mcp"
+      },
+       "ServerNamePathParam": {
+         "name": "name",
+         "in": "path",
+         "description": "Assigned server name (mcpServerId)",
+         "required": true,
+         "schema": {
+            "type": "string"
+         },
+         "example": "openai"
+      }
+    },
+    "responses": {
+      "NotFound": {
+        "description": "Resource not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "examples": {
+              "packageNotFound": {
+                "summary": "Package not found error",
+                "value": {
+                  "success": false,
+                  "error": "Package [name] not found"
+                }
+              }
+            }
+          }
+        }
+      },
+      "BadRequest": {
+        "description": "Invalid request input",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "examples": {
+              "missingParams": {
+                "summary": "Missing required parameters error",
+                "value": {
+                  "success": false,
+                  "error": "Package name and server name are required"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
