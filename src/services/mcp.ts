@@ -36,7 +36,7 @@ export interface MCPServer {
   env: Record<string, string>
   status: 'connected' | 'connecting' | 'disconnected' | 'error'
   enabled: boolean
-  errors?: string[]
+  logs?: string[]
   connection?: MCPConnection
   toolsList?: ToolsList
   // Event handlers for cleanup
@@ -47,9 +47,7 @@ export interface MCPServer {
   }
 }
 
-const mcpIndexes: IndexDefinition[] = [
-  { name: 'name', key: { name: 1 } }
-]
+const mcpIndexes: IndexDefinition[] = [{ name: 'name', key: { name: 1 } }]
 
 const globalEnv = {
   ...process.env,
@@ -81,26 +79,31 @@ export class MCPService implements Resource {
     await this.mcpDBClient.connect('mcp')
     await this.secrets.init()
     const list = await this.mcpDBClient.find({})
-    this.list = (list ?? []).map(({ _id, ...server }) => ({ 
-      ...server, 
+    this.list = (list ?? []).map(({ _id, ...server }) => ({
+      ...server,
       status: 'disconnected',
       enabled: server.enabled !== false // Default to true if not set
     }))
     for (const server of this.list) {
       await this.startMCPServer(server)
     }
-    log({ level: 'info', msg: `MCPService initialized with ${this.list.length} servers`})
+    log({ level: 'info', msg: `MCPService initialized with ${this.list.length} servers` })
   }
 
   private async startMCPServer(server: MCPServer) {
-    // Skip if server is disabled
+    const serverKey = sanitizeString(`${server.name}-${server.command}`)
+
+    // If server is disabled, add it to this.servers with disconnected status but don't start it
     if (server.enabled === false) {
-      log({ level: 'info', msg: `Server ${server.name} is disabled, skipping startup` })
+      log({ level: 'info', msg: `Server ${server.name} is disabled, adding to servers list but not starting` })
+      this.servers[serverKey] = {
+        ...server,
+        status: 'disconnected',
+        logs: []
+      }
       return
     }
 
-    const serverKey = sanitizeString(`${server.name}-${server.command}`)
-    
     try {
       const client = new Client(
         { name: 'MSQStdioClient', version: '1.0.0' },
@@ -111,81 +114,84 @@ export class MCPService implements Resource {
       this.servers[serverKey] = {
         ...server,
         status: 'connecting',
-        errors: [],
+        logs: [],
         connection: { client, transport }
       }
       this.serverKeys.push(serverKey)
 
-    // Create event handlers and store references for later cleanup
-    const transportErrorHandler = async (error: Error) => {
-      log({ level: 'error', msg: `${serverKey} transport error: ${error}` })
-      if (this.servers[serverKey]) {
-        this.servers[serverKey].errors?.push(error.message)
-      }
-    }
-
-    const transportCloseHandler = async () => {
-      log({ level: 'info', msg: `${serverKey} transport closed` })
-      if (this.servers[serverKey]) {
-        this.servers[serverKey].status = 'disconnected'
-      }
-    }
-    
-    // Store event handler references
-    this.servers[serverKey].eventHandlers = {
-      transportErrorHandler,
-      transportCloseHandler
-    }
-    
-    transport.onerror = transportErrorHandler
-    transport.onclose = transportCloseHandler
-    
-    // can't call start again, so we reassign it below with a monkey patch. thanks for the tip @saoudrizwan!
-    this.servers[serverKey].connection?.transport.start()
-    const stderrStream = this.servers[serverKey].connection?.transport.stderr
-    if (stderrStream) {
-      // Create and store stderr data handler
-      const stderrDataHandler = async (data: Buffer) => {
-        log({ level: 'error', msg: `${serverKey} stderr: ${data.toString()}` })
+      // Create event handlers and store references for later cleanup
+      const transportErrorHandler = async (error: Error) => {
+        log({ level: 'error', msg: `${serverKey} transport error: ${error}` })
         if (this.servers[serverKey]) {
-          this.servers[serverKey].errors?.push(data.toString())
+          this.servers[serverKey].logs?.push(error.message)
         }
       }
-      
-      this.servers[serverKey].eventHandlers!.stderrDataHandler = stderrDataHandler
-      stderrStream.on('data', stderrDataHandler)
-    } else {
-      log({ level: 'error', msg: `${serverKey} stderr stream is null` })
-    }
+
+      const transportCloseHandler = async () => {
+        log({ level: 'info', msg: `${serverKey} transport closed` })
+        if (this.servers[serverKey]) {
+          this.servers[serverKey].status = 'disconnected'
+        }
+      }
+
+      // Store event handler references
+      this.servers[serverKey].eventHandlers = {
+        transportErrorHandler,
+        transportCloseHandler
+      }
+
+      transport.onerror = transportErrorHandler
+      transport.onclose = transportCloseHandler
+
+      // can't call start again, so we reassign it below with a monkey patch. thanks for the tip @saoudrizwan!
+      this.servers[serverKey].connection?.transport.start()
+      const stderrStream = this.servers[serverKey].connection?.transport.stderr
+      if (stderrStream) {
+        // Create and store stderr data handler
+        const stderrDataHandler = async (data: Buffer) => {
+          log({ level: 'error', msg: `${serverKey} stderr: ${data.toString()}` })
+          if (this.servers[serverKey]) {
+            this.servers[serverKey].logs?.push(data.toString())
+          }
+        }
+
+        this.servers[serverKey].eventHandlers!.stderrDataHandler = stderrDataHandler
+        stderrStream.on('data', stderrDataHandler)
+      } else {
+        log({ level: 'error', msg: `${serverKey} stderr stream is null` })
+      }
       this.servers[serverKey].connection!.transport.start = async () => {}
 
       this.servers[serverKey].connection!.client.connect(this.servers[serverKey].connection!.transport)
       this.servers[serverKey].status = 'connected'
-      const tools = await this.servers[serverKey].connection!.client.request({ method: 'tools/list' }, ListToolsResultSchema)
+      const tools = await this.servers[serverKey].connection!.client.request(
+        { method: 'tools/list' },
+        ListToolsResultSchema
+      )
       this.servers[serverKey].toolsList = tools.tools
       log({ level: 'info', msg: `${serverKey} connected` })
-    } catch (error: any) {
-      log({ level: 'error', msg: `Failed to start server ${server.name}: ${error.message}` })
-      
+    } catch (error) {
+      log({ level: 'error', msg: `Failed to start server ${server.name}: ${(error as any).message}` })
+
       // Attempt to install missing package if PackageService is available
-      let installSuccess = false;
+      let installSuccess = false
       if (this.packageService) {
-        log({ level: 'info', msg: `Attempting to install missing package for server ${server.name}` });
-        installSuccess = await this.packageService.installMissingPackage(server.name);
+        log({ level: 'info', msg: `Attempting to install missing package for server ${server.name}` })
+        installSuccess = await this.packageService.installMissingPackage(server.name)
       }
-      
+
       // If installation failed or no PackageService, mark as disabled
       if (!installSuccess) {
         // Mark server as disabled in the database
-        server.enabled = false;
-        await this.mcpDBClient.update(server, { name: server.name });
-        log({ level: 'info', msg: `Server ${server.name} has been disabled due to startup failure` });
+        server.enabled = false
+        await this.mcpDBClient.update(server, { name: server.name })
+        log({ level: 'info', msg: `Server ${server.name} has been disabled due to startup failure` })
       }
     }
   }
 
   public async callTool(username: string, serverName: string, methodName: string, args: Record<string, unknown>) {
-    const server = Object.values(this.servers).find((server) => server.name === serverName)
+    const server = Object.values(this.servers).find(server => server.name === serverName)
     if (!server) {
       log({ level: 'error', msg: `Server ${serverName} not found` })
       return undefined
@@ -197,13 +203,19 @@ export class MCPService implements Resource {
     const secrets = await this.secrets.getSecrets(username, serverName)
     if (secrets[serverName] != null) {
       args = { ...args, ...secrets[serverName] }
-      log({ level: 'info', msg: `Secrets applied to tool call - ${serverName}:${methodName} - ${Object.keys(secrets).join(', ')}` })
+      log({
+        level: 'info',
+        msg: `Secrets applied to tool call - ${serverName}:${methodName} - ${Object.keys(secrets).join(', ')}`
+      })
     }
     log({ level: 'info', msg: `Calling tool - ${serverName}:${methodName}` })
-    const toolResponse = await server.connection!.client.callTool({ name: methodName, arguments: args }, CallToolResultSchema)
+    const toolResponse = await server.connection!.client.callTool(
+      { name: methodName, arguments: args },
+      CallToolResultSchema
+    )
     log({ level: 'info', msg: `Tool called - ${serverName}:${methodName}` })
     if (Array.isArray(toolResponse.content)) {
-      toolResponse.content = toolResponse.content.map((item) => {
+      toolResponse.content = toolResponse.content.map(item => {
         return item
       })
     }
@@ -218,15 +230,21 @@ export class MCPService implements Resource {
     await this.secrets.updateSecret({ username, serverName, secretName, secretValue: '', action: 'delete' })
   }
 
-  public async addServer(serverData: { name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }): Promise<MCPServer> {
-    const { name, command, args = [], env = {}, enabled = true } = serverData;
-    
+  public async addServer(serverData: {
+    name: string
+    command: string
+    args?: string[]
+    env?: Record<string, string>
+    enabled?: boolean
+  }): Promise<MCPServer> {
+    const { name, command, args = [], env = {}, enabled = true } = serverData
+
     // Check if server with this name already exists
-    const existingServer = await this.mcpDBClient.findOne({ name });
+    const existingServer = await this.mcpDBClient.findOne({ name })
     if (existingServer) {
-      throw new Error(`Server with name ${name} already exists`);
+      throw new Error(`Server with name ${name} already exists`)
     }
-    
+
     const server: MCPServer = {
       name,
       command,
@@ -234,188 +252,211 @@ export class MCPService implements Resource {
       env,
       status: 'disconnected',
       enabled
-    };
-    
-    await this.mcpDBClient.insert(server);
-    await this.startMCPServer(server);
-    
-    return server;
+    }
+
+    await this.mcpDBClient.insert(server)
+    await this.startMCPServer(server)
+
+    return server
   }
 
-  public async updateServer(name: string, serverData: { command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }): Promise<MCPServer | null> {
-    const existingServer = await this.mcpDBClient.findOne({ name });
+  public async updateServer(
+    name: string,
+    serverData: { command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }
+  ): Promise<MCPServer | null> {
+    const existingServer = await this.mcpDBClient.findOne({ name })
     if (!existingServer) {
-      throw new Error(`Server with name ${name} not found`);
+      throw new Error(`Server with name ${name} not found`)
     }
-    
+
     // Check if enabled state is changing
-    const enabledChanged = serverData.enabled !== undefined && serverData.enabled !== existingServer.enabled;
-    
+    const enabledChanged = serverData.enabled !== undefined && serverData.enabled !== existingServer.enabled
+
     const updatedServer: MCPServer = {
       ...existingServer,
       ...serverData,
       name // Ensure name doesn't change
-    };
-    
-    await this.mcpDBClient.update(updatedServer, { name });
-    
+    }
+
+    await this.mcpDBClient.update(updatedServer, { name })
+
     // If only the enabled state is changing, use the enable/disable methods
     if (enabledChanged && Object.keys(serverData).length === 1) {
       if (serverData.enabled) {
-        return this.enableServer(name);
+        return this.enableServer(name)
       } else {
-        return this.disableServer(name);
+        return this.disableServer(name)
       }
     }
-    
+
     // Otherwise, restart the server with the new configuration
     // Stop the existing server if it's running
-    const serverKey = sanitizeString(`${name}-${existingServer.command}`);
+    const serverKey = sanitizeString(`${name}-${existingServer.command}`)
     if (this.servers[serverKey]) {
       try {
         // Clean up event listeners first
         if (this.servers[serverKey].eventHandlers) {
-          const { stderrDataHandler, transportErrorHandler, transportCloseHandler } = this.servers[serverKey].eventHandlers;
-          
+          const { stderrDataHandler, transportErrorHandler, transportCloseHandler } = this.servers[
+            serverKey
+          ].eventHandlers
+
           // Remove stderr data handler if it exists
           if (stderrDataHandler && this.servers[serverKey].connection?.transport.stderr) {
-            this.servers[serverKey].connection.transport.stderr.removeListener('data', stderrDataHandler);
+            this.servers[serverKey].connection.transport.stderr.removeListener('data', stderrDataHandler)
           }
-          
+
           // Clear transport event handlers
           if (this.servers[serverKey].connection?.transport) {
             if (transportErrorHandler) {
-              this.servers[serverKey].connection.transport.onerror = undefined;
+              this.servers[serverKey].connection.transport.onerror = undefined
             }
             if (transportCloseHandler) {
-              this.servers[serverKey].connection.transport.onclose = undefined;
+              this.servers[serverKey].connection.transport.onclose = undefined
             }
           }
         }
-        
-        await this.servers[serverKey].connection?.transport.close();
-        await this.servers[serverKey].connection?.client.close();
-        delete this.servers[serverKey];
+
+        await this.servers[serverKey].connection?.transport.close()
+        await this.servers[serverKey].connection?.client.close()
+        delete this.servers[serverKey]
       } catch (error) {
-        log({ level: 'error', msg: `Error stopping server ${name}: ${error}` });
+        log({ level: 'error', msg: `Error stopping server ${name}: ${error}` })
       }
     }
-    
+
     // Start the updated server (startMCPServer will respect the enabled flag)
-    await this.startMCPServer(updatedServer);
-    
-    return updatedServer;
+    await this.startMCPServer(updatedServer)
+
+    return updatedServer
   }
 
   public async deleteServer(name: string): Promise<void> {
-    const existingServer = await this.mcpDBClient.findOne({ name });
+    const existingServer = await this.mcpDBClient.findOne({ name })
     if (!existingServer) {
-      throw new Error(`Server with name ${name} not found`);
+      throw new Error(`Server with name ${name} not found`)
     }
-    
+
     // Stop the server if it's running
-    const serverKey = sanitizeString(`${name}-${existingServer.command}`);
+    const serverKey = sanitizeString(`${name}-${existingServer.command}`)
     if (this.servers[serverKey]) {
       try {
         // Clean up event listeners first
         if (this.servers[serverKey].eventHandlers) {
-          const { stderrDataHandler, transportErrorHandler, transportCloseHandler } = this.servers[serverKey].eventHandlers;
-          
+          const { stderrDataHandler, transportErrorHandler, transportCloseHandler } = this.servers[
+            serverKey
+          ].eventHandlers
+
           // Remove stderr data handler if it exists
           if (stderrDataHandler && this.servers[serverKey].connection?.transport.stderr) {
-            this.servers[serverKey].connection.transport.stderr.removeListener('data', stderrDataHandler);
+            this.servers[serverKey].connection.transport.stderr.removeListener('data', stderrDataHandler)
           }
-          
+
           // Clear transport event handlers
           if (this.servers[serverKey].connection?.transport) {
             if (transportErrorHandler) {
-              this.servers[serverKey].connection.transport.onerror = undefined;
+              this.servers[serverKey].connection.transport.onerror = undefined
             }
             if (transportCloseHandler) {
-              this.servers[serverKey].connection.transport.onclose = undefined;
+              this.servers[serverKey].connection.transport.onclose = undefined
             }
           }
         }
-        
+
         // Now close the transport and client
-        await this.servers[serverKey].connection?.transport.close();
-        await this.servers[serverKey].connection?.client.close();
-        
+        await this.servers[serverKey].connection?.transport.close()
+        await this.servers[serverKey].connection?.client.close()
+
         // Finally delete the server reference
-        delete this.servers[serverKey];
+        delete this.servers[serverKey]
       } catch (error) {
-        log({ level: 'error', msg: `Error stopping server ${name}: ${error}` });
+        log({ level: 'error', msg: `Error stopping server ${name}: ${error}` })
       }
     }
-    
-    await this.mcpDBClient.delete({ name }, false);
+
+    await this.mcpDBClient.delete({ name }, false)
   }
 
   public async getServer(name: string): Promise<MCPServer | null> {
-    return this.mcpDBClient.findOne({ name });
+    return this.mcpDBClient.findOne({ name })
   }
 
   public async enableServer(name: string): Promise<MCPServer | null> {
-    const server = await this.mcpDBClient.findOne({ name });
+    const server = await this.mcpDBClient.findOne({ name })
     if (!server) {
-      throw new Error(`Server ${name} not found`);
+      throw new Error(`Server ${name} not found`)
     }
-    
-    server.enabled = true;
-    await this.mcpDBClient.update(server, { name });
-    
+
+    server.enabled = true
+    await this.mcpDBClient.update(server, { name })
+
     // If server is not running, start it
-    const serverKey = sanitizeString(`${name}-${server.command}`);
-    if (!this.servers[serverKey] || this.servers[serverKey].status === 'disconnected' || this.servers[serverKey].status === 'error') {
-      await this.startMCPServer(server);
+    const serverKey = sanitizeString(`${name}-${server.command}`)
+
+    // Update the enabled status in the in-memory server object
+    if (this.servers[serverKey]) {
+      this.servers[serverKey].enabled = true
     }
-    
-    return server;
+    if (
+      !this.servers[serverKey] ||
+      this.servers[serverKey].status === 'disconnected' ||
+      this.servers[serverKey].status === 'error'
+    ) {
+      await this.startMCPServer(server)
+    }
+
+    return server
   }
 
   public async disableServer(name: string): Promise<MCPServer | null> {
-    const server = await this.mcpDBClient.findOne({ name });
+    const server = await this.mcpDBClient.findOne({ name })
     if (!server) {
-      throw new Error(`Server ${name} not found`);
+      throw new Error(`Server ${name} not found`)
     }
-    
-    server.enabled = false;
-    await this.mcpDBClient.update(server, { name });
-    
+
+    server.enabled = false
+    await this.mcpDBClient.update(server, { name })
+
     // If server is running, stop it
-    const serverKey = sanitizeString(`${name}-${server.command}`);
+    const serverKey = sanitizeString(`${name}-${server.command}`)
+
+    // Update the enabled status in the in-memory server object
+    if (this.servers[serverKey]) {
+      this.servers[serverKey].enabled = false
+    }
     if (this.servers[serverKey] && this.servers[serverKey].status !== 'disconnected') {
       try {
         // Clean up event listeners first
         if (this.servers[serverKey].eventHandlers) {
-          const { stderrDataHandler, transportErrorHandler, transportCloseHandler } = this.servers[serverKey].eventHandlers;
-          
+          const { stderrDataHandler, transportErrorHandler, transportCloseHandler } = this.servers[
+            serverKey
+          ].eventHandlers
+
           // Remove stderr data handler if it exists
           if (stderrDataHandler && this.servers[serverKey].connection?.transport.stderr) {
-            this.servers[serverKey].connection.transport.stderr.removeListener('data', stderrDataHandler);
+            this.servers[serverKey].connection.transport.stderr.removeListener('data', stderrDataHandler)
           }
-          
+
           // Clear transport event handlers
           if (this.servers[serverKey].connection?.transport) {
             if (transportErrorHandler) {
-              this.servers[serverKey].connection.transport.onerror = undefined;
+              this.servers[serverKey].connection.transport.onerror = undefined
             }
             if (transportCloseHandler) {
-              this.servers[serverKey].connection.transport.onclose = undefined;
+              this.servers[serverKey].connection.transport.onclose = undefined
             }
           }
         }
-        
-        await this.servers[serverKey].connection?.transport.close();
-        await this.servers[serverKey].connection?.client.close();
-        this.servers[serverKey].status = 'disconnected';
-        log({ level: 'info', msg: `Server ${name} stopped due to being disabled` });
+
+        await this.servers[serverKey].connection?.transport.close()
+        await this.servers[serverKey].connection?.client.close()
+        this.servers[serverKey].status = 'disconnected'
+        log({ level: 'info', msg: `Server ${name} stopped due to being disabled` })
       } catch (error) {
-        log({ level: 'error', msg: `Error stopping server ${name}: ${error}` });
+        log({ level: 'error', msg: `Error stopping server ${name}: ${error}` })
       }
     }
-    
-    return server;
+
+    return server
   }
 
   public async stop() {
@@ -426,24 +467,26 @@ export class MCPService implements Resource {
         try {
           // Clean up event listeners first
           if (this.servers[serverKey].eventHandlers) {
-            const { stderrDataHandler, transportErrorHandler, transportCloseHandler } = this.servers[serverKey].eventHandlers;
-            
+            const { stderrDataHandler, transportErrorHandler, transportCloseHandler } = this.servers[
+              serverKey
+            ].eventHandlers
+
             // Remove stderr data handler if it exists
             if (stderrDataHandler && this.servers[serverKey].connection?.transport.stderr) {
-              this.servers[serverKey].connection.transport.stderr.removeListener('data', stderrDataHandler);
+              this.servers[serverKey].connection.transport.stderr.removeListener('data', stderrDataHandler)
             }
-            
+
             // Clear transport event handlers
             if (this.servers[serverKey].connection?.transport) {
               if (transportErrorHandler) {
-                this.servers[serverKey].connection.transport.onerror = undefined;
+                this.servers[serverKey].connection.transport.onerror = undefined
               }
               if (transportCloseHandler) {
-                this.servers[serverKey].connection.transport.onclose = undefined;
+                this.servers[serverKey].connection.transport.onclose = undefined
               }
             }
           }
-          
+
           await this.servers[serverKey].connection?.transport.close()
           await this.servers[serverKey].connection?.client.close()
           this.servers[serverKey].status = 'disconnected'

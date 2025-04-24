@@ -1,0 +1,625 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "MCP API - Tools",
+    "version": "1.0.0",
+    "description": "API for managing MCP (Multi-Process Controller) servers, tools, and secrets."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Default server"
+    }
+  ],
+  "tags": [
+    {
+      "name": "MCP Servers",
+      "description": "Operations related to managing MCP server instances."
+    },
+    {
+      "name": "MCP Tools",
+      "description": "Operations related to discovering and calling tools on MCP servers."
+    },
+    {
+      "name": "Secrets",
+      "description": "Operations for managing secrets associated with MCP servers."
+    }
+  ],
+  "paths": {
+    "/mcp/tool/call": {
+      "post": {
+        "tags": ["MCP Tools"],
+        "summary": "Call a tool",
+        "description": "Calls a specific tool method on a specified MCP server.",
+        "operationId": "callTool",
+        "requestBody": {
+          "description": "Details of the tool call request.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolCallRequest"
+              },
+              "example": {
+                "username": "testuser",
+                "serverName": "weather-server",
+                "methodName": "get_forecast",
+                "args": {
+                  "city": "San Francisco",
+                  "days": 5
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tool call successful. Response format depends on the tool.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "The result returned by the tool."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - Invalid input (e.g., invalid arguments format, missing required fields)."
+          },
+          "404": {
+            "description": "Not Found - Server name or method name not found."
+          },
+          "500": {
+            "description": "Internal Server Error - Error during tool execution."
+          }
+        }
+      }
+    },
+    "/mcp/servers": {
+      "get": {
+        "tags": ["MCP Servers"],
+        "summary": "List servers",
+        "description": "Gets a list of all configured MCP servers.",
+        "operationId": "getServers",
+        "responses": {
+          "200": {
+            "description": "A list of MCP servers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Server"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+             "description": "Internal Server Error."
+          }
+        }
+      },
+      "post": {
+        "tags": ["MCP Servers"],
+        "summary": "Add server",
+        "description": "Adds a new MCP server configuration.",
+        "operationId": "addServer",
+        "requestBody": {
+          "description": "Details of the server to add.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddServerRequest"
+              },
+              "example": {
+                "name": "weather-server",
+                "command": "node",
+                "args": ["weather-server.js"],
+                "env": {
+                  "API_KEY": "abc123",
+                  "DEBUG": "true"
+                },
+                "enabled": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Server added successfully.",
+             "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Server"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - Invalid input (e.g., missing required fields, invalid command)."
+          },
+          "409": {
+            "description": "Conflict - A server with the same name already exists."
+          },
+          "500": {
+            "description": "Internal Server Error."
+          }
+        }
+      }
+    },
+    "/mcp/servers/{name}": {
+      "parameters": [
+        {
+          "name": "name",
+          "in": "path",
+          "required": true,
+          "description": "The name of the MCP server.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "tags": ["MCP Servers"],
+        "summary": "Get server details",
+        "description": "Gets details of a specific MCP server by name.",
+        "operationId": "getServerByName",
+        "responses": {
+          "200": {
+            "description": "Server details found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Server"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found - Server with the specified name does not exist."
+          },
+          "500": {
+            "description": "Internal Server Error."
+          }
+        }
+      },
+      "put": {
+        "tags": ["MCP Servers"],
+        "summary": "Update server",
+        "description": "Updates an existing MCP server's configuration.",
+        "operationId": "updateServer",
+        "requestBody": {
+          "description": "Fields to update for the server.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateServerRequest"
+              },
+              "example": {
+                "command": "node",
+                "args": ["updated-weather-server.js"],
+                "env": {
+                  "API_KEY": "new-key-123",
+                  "DEBUG": "false"
+                },
+                "enabled": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Server updated successfully.",
+             "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Server"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - Invalid input."
+          },
+          "404": {
+            "description": "Not Found - Server with the specified name does not exist."
+          },
+          "500": {
+            "description": "Internal Server Error."
+          }
+        }
+      },
+      "delete": {
+        "tags": ["MCP Servers"],
+        "summary": "Delete server",
+        "description": "Deletes an MCP server configuration.",
+        "operationId": "deleteServer",
+        "responses": {
+          "204": {
+            "description": "Server deleted successfully."
+          },
+          "404": {
+            "description": "Not Found - Server with the specified name does not exist (or handled gracefully)."
+          },
+          "500": {
+            "description": "Internal Server Error."
+          }
+        }
+      }
+    },
+    "/mcp/servers/{name}/enable": {
+      "parameters": [
+        {
+          "name": "name",
+          "in": "path",
+          "required": true,
+          "description": "The name of the MCP server to enable.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "tags": ["MCP Servers"],
+        "summary": "Enable server",
+        "description": "Enables a specific MCP server.",
+        "operationId": "enableServer",
+        "responses": {
+          "200": {
+            "description": "Server enabled successfully (or was already enabled).",
+             "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Server"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found - Server with the specified name does not exist."
+          },
+          "500": {
+            "description": "Internal Server Error."
+          }
+        }
+      }
+    },
+    "/mcp/servers/{name}/disable": {
+      "parameters": [
+        {
+          "name": "name",
+          "in": "path",
+          "required": true,
+          "description": "The name of the MCP server to disable.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "tags": ["MCP Servers"],
+        "summary": "Disable server",
+        "description": "Disables a specific MCP server.",
+        "operationId": "disableServer",
+        "responses": {
+          "200": {
+            "description": "Server disabled successfully (or was already disabled).",
+             "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Server"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found - Server with the specified name does not exist."
+          },
+          "500": {
+            "description": "Internal Server Error."
+          }
+        }
+      }
+    },
+    "/mcp/tools": {
+      "get": {
+        "tags": ["MCP Tools"],
+        "summary": "List all tools",
+        "description": "Gets a list of all tools available across all enabled MCP servers.",
+        "operationId": "getTools",
+        "responses": {
+          "200": {
+            "description": "A list of available tools.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Tool"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error."
+          }
+        }
+      }
+    },
+    "/secrets/set": {
+      "post": {
+        "tags": ["Secrets"],
+        "summary": "Set secret",
+        "description": "Sets or updates a secret value for a specific server and user.",
+        "operationId": "setSecret",
+        "requestBody": {
+          "description": "Details of the secret to set.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetSecretRequest"
+              },
+              "example": {
+                "username": "testuser",
+                "serverName": "weather-server",
+                "secretName": "API_KEY",
+                "secretValue": "super-secret-key-123"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Secret set successfully."
+          },
+          "400": {
+            "description": "Bad Request - Invalid input."
+          },
+          "404": {
+            "description": "Not Found - Server with the specified name does not exist."
+          },
+          "500": {
+            "description": "Internal Server Error."
+          }
+        }
+      }
+    },
+    "/secrets/delete": {
+       "post": {
+        "tags": ["Secrets"],
+        "summary": "Delete secret",
+        "description": "Deletes a secret for a specific server and user.",
+        "operationId": "deleteSecret",
+        "requestBody": {
+          "description": "Details of the secret to delete.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteSecretRequest"
+              },
+              "example": {
+                "username": "testuser",
+                "serverName": "weather-server",
+                "secretName": "API_KEY"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Secret deleted successfully (or secret did not exist)."
+          },
+          "400": {
+            "description": "Bad Request - Invalid input."
+          },
+           "404": {
+            "description": "Not Found - Server with the specified name does not exist."
+          },
+          "500": {
+            "description": "Internal Server Error."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ToolCallRequest": {
+        "type": "object",
+        "required": [
+          "serverName",
+          "methodName",
+          "args"
+        ],
+        "properties": {
+          "username": {
+            "type": "string",
+            "description": "User associated with the call (optional, defaults based on server config).",
+            "nullable": true,
+            "default": "default"
+          },
+          "serverName": {
+            "type": "string",
+            "description": "Name of the MCP server hosting the tool."
+          },
+          "methodName": {
+            "type": "string",
+            "description": "Name of the tool method to call."
+          },
+          "args": {
+            "type": "object",
+            "description": "Arguments to pass to the tool method.",
+            "additionalProperties": {}
+          }
+        }
+      },
+      "AddServerRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "command"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Unique name for the MCP server."
+          },
+          "command": {
+            "type": "string",
+            "description": "The command to execute to start the server process."
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Arguments to pass to the command.",
+            "default": []
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Environment variables to set for the server process.",
+             "default": {}
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the server should be enabled upon creation.",
+            "default": true
+          }
+        }
+      },
+       "UpdateServerRequest": {
+        "type": "object",
+        "description": "Fields to update for an existing server. All fields are optional.",
+        "properties": {
+           "command": {
+            "type": "string",
+            "description": "The command to execute to start the server process."
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Arguments to pass to the command."
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Environment variables to set for the server process."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the server is enabled."
+          }
+        }
+      },
+      "Server": {
+         "allOf": [
+           {
+             "$ref": "#/components/schemas/AddServerRequest"
+           },
+           {
+             "type": "object",
+             "properties": {
+               "status": {
+                 "type": "string",
+                 "enum": ["running", "stopped", "error", "starting", "stopping"],
+                 "description": "Current status of the server process.",
+                 "readOnly": true
+               },
+               "pid": {
+                 "type": "integer",
+                 "format": "int32",
+                 "description": "Process ID if the server is running.",
+                 "readOnly": true,
+                 "nullable": true
+               }
+             }
+           }
+         ]
+      },
+       "Tool": {
+         "type": "object",
+         "properties": {
+           "serverName": {
+             "type": "string",
+             "description": "Name of the server hosting the tool."
+           },
+           "toolName": {
+             "type": "string",
+             "description": "Name of the tool."
+           },
+           "description": {
+             "type": "string",
+             "description": "Description of the tool (if available)."
+           }
+         }
+       },
+      "SetSecretRequest": {
+        "type": "object",
+        "required": [
+          "serverName",
+          "secretName",
+          "secretValue"
+        ],
+        "properties": {
+           "username": {
+            "type": "string",
+            "description": "User associated with the secret (optional, defaults based on server config).",
+            "nullable": true,
+            "default": "default"
+          },
+           "serverName": {
+            "type": "string",
+            "description": "Name of the MCP server the secret belongs to."
+          },
+           "secretName": {
+            "type": "string",
+            "description": "Name of the secret (e.g., API_KEY)."
+          },
+          "secretValue": {
+            "type": "string",
+            "format": "password",
+            "description": "The value of the secret."
+          }
+        }
+      },
+       "DeleteSecretRequest": {
+        "type": "object",
+        "required": [
+          "serverName",
+          "secretName"
+        ],
+        "properties": {
+           "username": {
+            "type": "string",
+            "description": "User associated with the secret (optional, defaults based on server config).",
+            "nullable": true,
+            "default": "default"
+          },
+           "serverName": {
+            "type": "string",
+            "description": "Name of the MCP server the secret belongs to."
+          },
+           "secretName": {
+            "type": "string",
+            "description": "Name of the secret to delete."
+          }
+        }
+      }
+    }
+  }
+}
