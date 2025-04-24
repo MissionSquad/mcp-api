@@ -126,7 +126,7 @@ export class PackagesController implements Resource {
           log({ level: 'error', msg: `Failed to install ${pkg.repo} as ${pkg.name}: ${result.error}` })
         }
       } catch (error) {
-        log({ level: 'error', msg: `Error installing package ${pkg.repo}: ${error.message}` })
+        log({ level: 'error', msg: `Error installing package ${pkg.repo}: ${(error as any).message}` })
       }
     }
   }
@@ -259,8 +259,8 @@ export class PackagesController implements Resource {
         })
       }
     } catch (error) {
-      log({ level: 'error', msg: `Error installing package: ${error.message}` })
-      res.status(500).json({ success: false, error: error.message })
+      log({ level: 'error', msg: `Error installing package: ${(error as any).message}` })
+      res.status(500).json({ success: false, error: (error as any).message })
     }
   }
 
@@ -276,7 +276,7 @@ export class PackagesController implements Resource {
 
       res.json({ success: true, packages })
     } catch (error) {
-      res.status(500).json({ success: false, error: error.message })
+      res.status(500).json({ success: false, error: (error as any).message })
     }
   }
 
@@ -304,7 +304,7 @@ export class PackagesController implements Resource {
 
       res.json({ success: true, package: packageInfo })
     } catch (error) {
-      res.status(500).json({ success: false, error: error.message })
+      res.status(500).json({ success: false, error: (error as any).message })
     }
   }
 
@@ -332,7 +332,7 @@ export class PackagesController implements Resource {
 
       res.json({ success: true, package: packageInfo })
     } catch (error) {
-      res.status(500).json({ success: false, error: error.message })
+      res.status(500).json({ success: false, error: (error as any).message })
     }
   }
 
@@ -350,7 +350,7 @@ export class PackagesController implements Resource {
         res.status(400).json({ success: false, error: result.error })
       }
     } catch (error) {
-      res.status(500).json({ success: false, error: error.message })
+      res.status(500).json({ success: false, error: (error as any).message })
     }
   }
 
@@ -366,8 +366,8 @@ export class PackagesController implements Resource {
         res.status(400).json({ success: false, error: result.error })
       }
     } catch (error) {
-      log({ level: 'error', msg: `Error enabling package ${req.params.name}: ${error.message}` })
-      res.status(500).json({ success: false, error: error.message })
+      log({ level: 'error', msg: `Error enabling package ${req.params.name}: ${(error as any).message}` })
+      res.status(500).json({ success: false, error: (error as any).message })
     }
   }
 
@@ -383,8 +383,8 @@ export class PackagesController implements Resource {
         res.status(400).json({ success: false, error: result.error })
       }
     } catch (error) {
-      log({ level: 'error', msg: `Error disabling package ${req.params.name}: ${error.message}` })
-      res.status(500).json({ success: false, error: error.message })
+      log({ level: 'error', msg: `Error disabling package ${req.params.name}: ${(error as any).message}` })
+      res.status(500).json({ success: false, error: (error as any).message })
     }
   }
 
@@ -402,8 +402,8 @@ export class PackagesController implements Resource {
       const updates = await this.packageService.checkForUpdates(serverName)
       res.json({ success: true, ...updates })
     } catch (error) {
-      log({ level: 'error', msg: `Error checking for updates: ${error.message}` })
-      res.status(500).json({ success: false, error: error.message })
+      log({ level: 'error', msg: `Error checking for updates: ${(error as any).message}` })
+      res.status(500).json({ success: false, error: (error as any).message })
     }
   }
 
@@ -434,8 +434,8 @@ export class PackagesController implements Resource {
         })
       }
     } catch (error) {
-      log({ level: 'error', msg: `Error upgrading package: ${error.message}` })
-      res.status(500).json({ success: false, error: error.message })
+      log({ level: 'error', msg: `Error upgrading package: ${(error as any).message}` })
+      res.status(500).json({ success: false, error: (error as any).message })
     }
   }
 
@@ -455,8 +455,8 @@ export class PackagesController implements Resource {
         results: result.results
       })
     } catch (error) {
-      log({ level: 'error', msg: `Error upgrading all packages: ${error.message}` })
-      res.status(500).json({ success: false, error: error.message })
+      log({ level: 'error', msg: `Error upgrading all packages: ${(error as any).message}` })
+      res.status(500).json({ success: false, error: (error as any).message })
     }
   }
 
