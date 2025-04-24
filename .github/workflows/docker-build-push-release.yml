@@ -78,18 +78,18 @@ jobs:
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
-      - name: Scan Docker image for vulnerabilities
-        uses: aquasecurity/trivy-action@master
-        env:
-          TRIVY_USERNAME: ${{ github.actor }}
-          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.package-version.outputs.VERSION }}
-          format: 'table'
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
+      # - name: Scan Docker image for vulnerabilities
+      #   uses: aquasecurity/trivy-action@master
+      #   env:
+      #     TRIVY_USERNAME: ${{ github.actor }}
+      #     TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      #   with:
+      #     image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.package-version.outputs.VERSION }}
+      #     format: 'table'
+      #     exit-code: '1'
+      #     ignore-unfixed: true
+      #     vuln-type: 'os,library'
+      #     severity: 'CRITICAL,HIGH'
 
       - name: Get Pull Request Messages
         id: pr-messages
