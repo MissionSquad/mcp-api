@@ -1,6 +1,6 @@
 {
   "name": "@missionsquad/mcp-api",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "MCP Servers exposed via HTTP API",
   "main": "dist/index.js",
   "repository": "missionsquad/mcp-api",
