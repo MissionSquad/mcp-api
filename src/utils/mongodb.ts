@@ -10,6 +10,7 @@ import {
   InsertOneResult,
   MongoClientOptions,
   OptionalUnlessRequiredId,
+  ReadPreference,
   Sort,
   UpdateResult,
   WithId
@@ -32,6 +33,7 @@ export interface MongoConnectionParams {
   user: string
   pass: string
   authDB?: string
+  replicaSet?: string
 }
 
 export class MongoDBClient<T extends Document> {
@@ -49,7 +51,8 @@ export class MongoDBClient<T extends Document> {
       db,
       user,
       pass,
-      authDB
+      authDB,
+      replicaSet
     }: MongoConnectionParams,
     indexes: IndexDefinition[] = []
   ) {
@@ -58,11 +61,17 @@ export class MongoDBClient<T extends Document> {
     const options: MongoClientOptions = {
       auth: {
         username: user,
-        password: pass
+        password: pass,
       }
     }
     if (authDB) {
       options.authSource = authDB
+    }
+    if (replicaSet) {
+      options.replicaSet = replicaSet
+      options.readPreference = ReadPreference.PRIMARY_PREFERRED
+      options.writeConcern = { w: 'majority' }
+      options.retryWrites = true
     }
     this.client = new MongoClient(this.url, options)
     this.indexes = indexes
