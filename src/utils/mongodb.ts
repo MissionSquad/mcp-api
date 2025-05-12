@@ -53,7 +53,7 @@ export class MongoDBClient<T extends Document> {
     }: MongoConnectionParams,
     indexes: IndexDefinition[] = []
   ) {
-    this.url = `mongodb://${host}`
+    this.url = host.includes('://') ? host : `mongodb://${host}`
     this.dbName = db
     const options: MongoClientOptions = {
       auth: {
