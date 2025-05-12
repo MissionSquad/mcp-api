@@ -17,7 +17,8 @@ const mongoParams: MongoConnectionParams = {
   user: env.MONGO_USER,
   pass: env.MONGO_PASS,
   host: env.MONGO_HOST,
-  db: env.MONGO_DBNAME
+  db: env.MONGO_DBNAME,
+  replicaSet: env.MONGO_REPLICASET
 }
 
 export class API {
