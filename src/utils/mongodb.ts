@@ -111,7 +111,7 @@ export class MongoDBClient<T extends Document> {
         log({ level: 'info', msg: `Created index ${name}` })
       }
     }
-    log({ level: 'info', msg: `Connected to MongoDB collection: ${collectionName}` })
+    log({ level: 'info', msg: `Connected to MongoDB collection: ${collectionName} at ${this.url}` })
   }
 
   /**
