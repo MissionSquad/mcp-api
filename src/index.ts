@@ -6,6 +6,8 @@ import { env } from './env'
 import { MongoConnectionParams } from './utils/mongodb'
 import { MCPController } from './controllers/mcp'
 import { PackagesController } from './controllers/packages'
+import { AuthController } from './controllers/auth'
+import { Secrets } from './services/secrets'
 
 export type Resource = {
   init: () => Promise<void>
@@ -33,12 +35,20 @@ export class API {
 
   public async start() {
     const { app } = this
+
+    // Initialize Secrets service
+    const secretsService = new Secrets({ mongoParams })
+    await secretsService.init()
     
     // Initialize MCP controller
-    const mcpController = new MCPController({ app, mongoParams })
+    const mcpController = new MCPController({ app, mongoParams, secretsService })
     await mcpController.init()
     mcpController.registerRoutes()
     this.resources.push(mcpController)
+
+    // Initialize Auth controller
+    const authController = new AuthController(app, mcpController.getMcpService(), secretsService)
+    authController.registerRoutes()
     
     // Initialize Packages controller
     const packagesController = new PackagesController({ 

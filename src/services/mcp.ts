@@ -59,12 +59,18 @@ export class MCPService implements Resource {
   private list: MCPServer[] = []
   private serverKeys: string[] = []
   private mcpDBClient: MongoDBClient<MCPServer>
-  private secrets: Secrets
+  public secretsService: Secrets
   private packageService?: any // Will be set after initialization to avoid circular dependency
 
-  constructor({ mongoParams }: { mongoParams: MongoConnectionParams }) {
+  constructor({
+    mongoParams,
+    secretsService
+  }: {
+    mongoParams: MongoConnectionParams
+    secretsService: Secrets
+  }) {
     this.mcpDBClient = new MongoDBClient<MCPServer>(mongoParams, mcpIndexes)
-    this.secrets = new Secrets({ mongoParams })
+    this.secretsService = secretsService
   }
 
   /**
@@ -77,7 +83,7 @@ export class MCPService implements Resource {
 
   public async init() {
     await this.mcpDBClient.connect('mcp')
-    await this.secrets.init()
+    // No need to init secrets here, it will be done at a higher level
     const list = await this.mcpDBClient.find({})
     this.list = (list ?? []).map(({ _id, ...server }) => ({
       ...server,
@@ -121,7 +127,7 @@ export class MCPService implements Resource {
 
       // Create event handlers and store references for later cleanup
       const transportErrorHandler = async (error: Error) => {
-        log({ level: 'error', msg: `${serverKey} transport error: ${error}` })
+        log({ level: 'error', msg: `${serverKey} transport error: ${error.message}`, error })
         if (this.servers[serverKey]) {
           this.servers[serverKey].logs?.push(error.message)
         }
@@ -131,6 +137,11 @@ export class MCPService implements Resource {
         log({ level: 'info', msg: `${serverKey} transport closed` })
         if (this.servers[serverKey]) {
           this.servers[serverKey].status = 'disconnected'
+          // Add a final log of all captured stderr logs for debugging
+          log({
+            level: 'info',
+            msg: `Final logs for ${serverKey}: ${JSON.stringify(this.servers[serverKey].logs, null, 2)}`
+          })
         }
       }
 
@@ -143,15 +154,22 @@ export class MCPService implements Resource {
       transport.onerror = transportErrorHandler
       transport.onclose = transportCloseHandler
 
+      log({
+        level: 'info',
+        msg: `Attempting to start server ${server.name} with command: ${
+          server.command
+        } ${server.args.join(' ')}`
+      })
       // can't call start again, so we reassign it below with a monkey patch. thanks for the tip @saoudrizwan!
       this.servers[serverKey].connection?.transport.start()
       const stderrStream = this.servers[serverKey].connection?.transport.stderr
       if (stderrStream) {
         // Create and store stderr data handler
         const stderrDataHandler = async (data: Buffer) => {
-          log({ level: 'error', msg: `${serverKey} stderr: ${data.toString()}` })
+          const logMsg = data.toString()
+          log({ level: 'error', msg: `${serverKey} stderr: ${logMsg}` })
           if (this.servers[serverKey]) {
-            this.servers[serverKey].logs?.push(data.toString())
+            this.servers[serverKey].logs?.push(logMsg)
           }
         }
 
@@ -200,7 +218,7 @@ export class MCPService implements Resource {
       log({ level: 'error', msg: `Server ${serverName} not connected. Status: ${server.status}` })
       return undefined
     }
-    const secrets = await this.secrets.getSecrets(username, serverName)
+    const secrets = await this.secretsService.getSecrets(username, serverName)
     if (secrets[serverName] != null) {
       args = { ...args, ...secrets[serverName] }
       log({
@@ -223,11 +241,11 @@ export class MCPService implements Resource {
   }
 
   public async setSecret(username: string, serverName: string, secretName: string, secretValue: string) {
-    await this.secrets.updateSecret({ username, serverName, secretName, secretValue, action: 'update' })
+    await this.secretsService.updateSecret({ username, serverName, secretName, secretValue, action: 'update' })
   }
 
   public async deleteSecret(username: string, serverName: string, secretName: string) {
-    await this.secrets.updateSecret({ username, serverName, secretName, secretValue: '', action: 'delete' })
+    await this.secretsService.updateSecret({ username, serverName, secretName, secretValue: '', action: 'delete' })
   }
 
   public async addServer(serverData: {
