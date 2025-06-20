@@ -3,6 +3,7 @@ import { MCPService } from '../services/mcp'
 import { MongoConnectionParams } from '../utils/mongodb'
 import { Resource } from '..'
 import { log } from '../utils/general'
+import { Secrets } from '../services/secrets'
 
 export interface ToolCallRequest {
   username?: string
@@ -43,9 +44,17 @@ export class MCPController implements Resource {
   private app: Express
   private mcpService: MCPService
 
-  constructor({ app, mongoParams }: { app: Express; mongoParams: MongoConnectionParams }) {
+  constructor({
+    app,
+    mongoParams,
+    secretsService
+  }: {
+    app: Express
+    mongoParams: MongoConnectionParams
+    secretsService: Secrets
+  }) {
     this.app = app
-    this.mcpService = new MCPService({ mongoParams })
+    this.mcpService = new MCPService({ mongoParams, secretsService })
   }
 
   /**
@@ -113,8 +122,35 @@ export class MCPController implements Resource {
   private async callTool(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const body = req.body as ToolCallRequest
-      const { serverName, methodName, args } = body
+      let { serverName, methodName, args } = body
       const username = body.username ?? 'default'
+
+      // 1. Get the server's configuration from the MCPService
+      const server = await this.mcpService.getServer(serverName)
+      const authType = server?.env?.MCP_AUTH_TYPE
+
+      // 2. Check if the server has declared it needs Google OAuth2 tokens
+      if (authType === 'OAUTH2_GOOGLE' && !methodName.startsWith('auth_')) {
+        // 3. Retrieve the encrypted tokens using the Secrets service
+        const userSecrets = await this.mcpService.secretsService.getSecrets(username, serverName)
+        const googleTokensString = userSecrets[serverName]?.google_tokens
+
+        if (!googleTokensString) {
+          throw new Error(`Google tokens not found for user ${username}. Please authenticate.`)
+        }
+        const googleTokens = JSON.parse(googleTokensString)
+
+        // 4. Retrieve the app's OAuth client details (from env or secure config)
+        const gauthFileContent = JSON.parse(process.env.GOOGLE_OAUTH_CREDENTIALS || '{}')
+
+        // 5. Inject the hidden parameters
+        args = {
+          ...args,
+          userCredentials: googleTokens,
+          gauthFileContent: gauthFileContent
+        }
+      }
+
       log({
         level: 'info',
         msg: `calling tool ${methodName} on server ${serverName} with args ${JSON.stringify(args)}`

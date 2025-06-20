@@ -956,6 +956,66 @@ The MCP API implements a robust security model for handling secrets:
 
 This approach allows for secure multi-user access to shared MCP server instances while maintaining strong isolation between users' credentials.
 
+### OAuth2 Authentication Flow
+
+For MCP servers that require user-specific OAuth2 authentication (like Google), the API provides a generic, secure, and scalable workflow. This allows users to grant consent once and enables the platform to perform actions on their behalf indefinitely, without the user or the front-end ever handling sensitive tokens.
+
+**How It Works:**
+
+The system uses a "declaration" pattern. An MCP server can declare its need for OAuth2 authentication via an environment variable in its configuration. The `mcp-api` host then orchestrates the flow.
+
+**Full End-to-End Workflow:**
+
+1.  **Prerequisites:**
+    *   **Google Cloud Project:** You must have a Google Cloud project with the required APIs (e.g., Gmail API, Calendar API) enabled.
+    *   **OAuth Consent Screen:** Configure the consent screen in your Google Cloud project.
+    *   **OAuth 2.0 Client ID:** Create an "OAuth 2.0 Client ID" for a "Web application".
+        *   **Authorized JavaScript origins:** Add the URL of your front-end application (e.g., `http://localhost:8081`).
+        *   **Authorized redirect URIs:** This is the most critical step. Add the full callback URL of your `mcp-api` host. For example: `http://localhost:8080/auth/google/callback`. This must exactly match the URL of the API endpoint that handles the callback.
+    *   **Download Credentials:** Download the JSON file containing your `client_id` and `client_secret`.
+
+2.  **API Environment Configuration:**
+    *   In the `.env` file for your `mcp-api` instance, create a new variable named `GOOGLE_OAUTH_CREDENTIALS`.
+    *   The value of this variable should be the **entire content** of the JSON file you downloaded from Google, pasted as a single-line string.
+
+3.  **Install and Configure the MCP Server:**
+    *   Use the `POST /packages/install` endpoint to install an OAuth2-capable MCP server (e.g., `mcp-google-workspace`).
+    *   In the request body, you **must** include the `env` object to declare the authentication type:
+        ```json
+        {
+          "name": "@missionsquad/mcp-google-workspace",
+          "serverName": "mcp-google-workspace",
+          "env": {
+            "MCP_AUTH_TYPE": "OAUTH2_GOOGLE"
+          }
+        }
+        ```
+    *   This `MCP_AUTH_TYPE` variable tells the `mcp-api` that this server requires the special OAuth2 token injection flow.
+
+4.  **Initiate User Authentication (Front-End):**
+    *   The front-end application provides a "Connect to Google" button or link for the user.
+    *   When clicked, this link should direct the user to the `mcp-api`'s login endpoint, including their unique user ID.
+    *   **Example Link:** `http://localhost:8080/auth/google/login?user_id=user123`
+
+5.  **Orchestration (API and Google):**
+    *   The `mcp-api` receives the request, calls the `auth_get_authorization_url` tool on the `mcp-google-workspace` server, and redirects the user's browser to the unique URL provided by Google.
+    *   The user sees the Google consent screen, reviews the requested permissions, and clicks "Allow".
+    *   Google redirects the user's browser back to the `redirect_uri` you configured (`http://localhost:8080/auth/google/callback`), including a temporary `authorization_code`.
+
+6.  **Token Exchange and Storage (API):**
+    *   The `mcp-api`'s callback endpoint receives the `authorization_code`.
+    *   It calls the `auth_exchange_code` tool on the `mcp-google-workspace` server to exchange the code for a long-lived `refresh_token` and a short-lived `access_token`.
+    *   The API then securely saves the entire JSON object of these tokens into the encrypted `Secrets` database, associated with `user123` and the `mcp-google-workspace` server.
+    *   The user is shown a success message and can close the tab.
+
+7.  **Subsequent Tool Calls (Seamless and Secure):**
+    *   From now on, whenever the front-end makes a `POST /mcp/tool/call` request for `user123` to the `mcp-google-workspace` server (e.g., to query emails), the `mcp-api` automatically:
+        1.  Recognizes that this server requires `OAUTH2_GOOGLE` auth.
+        2.  Retrieves the user's encrypted tokens from the `Secrets` database.
+        3.  Retrieves the global application credentials from the `GOOGLE_OAUTH_CREDENTIALS` environment variable.
+        4.  Injects both sets of credentials as hidden parameters into the tool call.
+    *   The `mcp-google-workspace` server receives these credentials, creates a temporary authenticated client, and executes the tool. The front-end never handles any tokens.
+
 ## Security Considerations
 
 - The `SECRETS_KEY` environment variable is used to encrypt all secrets. Keep this secure and unique for each deployment.
