@@ -1,6 +1,6 @@
 {
   "name": "@missionsquad/mcp-api",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "MCP Servers exposed via HTTP API",
   "main": "dist/index.js",
   "repository": "missionsquad/mcp-api",
@@ -26,7 +26,7 @@
   "author": "Jayson Jacobs",
   "license": "Apache-2.0",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.5.0",
+    "@modelcontextprotocol/sdk": "^1.13.0",
     "@types/bcrypt": "^5.0.2",
     "base64-js": "^1.5.1",
     "base64-url": "^2.3.3",
