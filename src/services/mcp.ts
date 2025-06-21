@@ -1,4 +1,5 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { log, sanitizeString } from '../utils/general'
 import { CallToolResultSchema, ListToolsResultSchema } from '@modelcontextprotocol/sdk/types.js'
@@ -36,6 +37,7 @@ export interface MCPServer {
   env: Record<string, string>
   status: 'connected' | 'connecting' | 'disconnected' | 'error'
   enabled: boolean
+  startupTimeout?: number
   logs?: string[]
   connection?: MCPConnection
   toolsList?: ToolsList
@@ -182,9 +184,14 @@ export class MCPService implements Resource {
 
       this.servers[serverKey].connection!.client.connect(this.servers[serverKey].connection!.transport)
       this.servers[serverKey].status = 'connected'
+      const requestOptions: RequestOptions = {}
+      if (server.startupTimeout) {
+        requestOptions.timeout = server.startupTimeout
+      }
       const tools = await this.servers[serverKey].connection!.client.request(
         { method: 'tools/list' },
-        ListToolsResultSchema
+        ListToolsResultSchema,
+        requestOptions
       )
       this.servers[serverKey].toolsList = tools.tools
       log({ level: 'info', msg: `${serverKey} connected` })
@@ -227,9 +234,14 @@ export class MCPService implements Resource {
       })
     }
     log({ level: 'info', msg: `Calling tool - ${serverName}:${methodName}` })
+    const requestOptions: RequestOptions = {}
+    if (server.startupTimeout) {
+      requestOptions.timeout = server.startupTimeout
+    }
     const toolResponse = await server.connection!.client.callTool(
       { name: methodName, arguments: args },
-      CallToolResultSchema
+      CallToolResultSchema,
+      requestOptions
     )
     log({ level: 'info', msg: `Tool called - ${serverName}:${methodName}` })
     if (Array.isArray(toolResponse.content)) {
@@ -254,8 +266,9 @@ export class MCPService implements Resource {
     args?: string[]
     env?: Record<string, string>
     enabled?: boolean
+    startupTimeout?: number
   }): Promise<MCPServer> {
-    const { name, command, args = [], env = {}, enabled = true } = serverData
+    const { name, command, args = [], env = {}, enabled = true, startupTimeout } = serverData
 
     // Check if server with this name already exists
     const existingServer = await this.mcpDBClient.findOne({ name })
@@ -269,7 +282,8 @@ export class MCPService implements Resource {
       args,
       env,
       status: 'disconnected',
-      enabled
+      enabled,
+      startupTimeout
     }
 
     await this.mcpDBClient.insert(server)
@@ -280,7 +294,13 @@ export class MCPService implements Resource {
 
   public async updateServer(
     name: string,
-    serverData: { command?: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }
+    serverData: {
+      command?: string
+      args?: string[]
+      env?: Record<string, string>
+      enabled?: boolean
+      startupTimeout?: number
+    }
   ): Promise<MCPServer | null> {
     const existingServer = await this.mcpDBClient.findOne({ name })
     if (!existingServer) {
@@ -293,7 +313,8 @@ export class MCPService implements Resource {
     const updatedServer: MCPServer = {
       ...existingServer,
       ...serverData,
-      name // Ensure name doesn't change
+      name, // Ensure name doesn't change
+      startupTimeout: serverData.startupTimeout ?? existingServer.startupTimeout
     }
 
     await this.mcpDBClient.update(updatedServer, { name })

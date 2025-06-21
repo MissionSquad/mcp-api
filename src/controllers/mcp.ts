@@ -31,6 +31,7 @@ export interface AddServerRequest {
   args?: string[]
   env?: Record<string, string>
   enabled?: boolean
+  startupTimeout?: number
 }
 
 export interface UpdateServerRequest {
@@ -38,6 +39,7 @@ export interface UpdateServerRequest {
   args?: string[]
   env?: Record<string, string>
   enabled?: boolean
+  startupTimeout?: number
 }
 
 export class MCPController implements Resource {
