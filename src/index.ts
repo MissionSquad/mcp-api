@@ -63,6 +63,11 @@ export class API {
     // Set up circular dependency between MCPService and PackageService
     mcpController.getMcpService().setPackageService(packagesController.getPackageService())
 
+    app.get('/healthz', (req, res) => {
+      console.log('Health checked')
+      res.status(200).send('OK')
+    })
+
     // Start the server
     app.listen(env.PORT, () => {
       log({ level: 'info', msg: `Server running at http://localhost:${env.PORT}` })
