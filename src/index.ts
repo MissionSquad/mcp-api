@@ -85,6 +85,18 @@ export class API {
 
 const api = new API()
 
+// Global error handlers to prevent crash loops
+process.on('unhandledRejection', (reason, promise) => {
+  log({ level: 'error', msg: 'Unhandled Rejection at:', error: reason })
+  // Application specific logging, throwing an error, or other logic here
+})
+
+process.on('uncaughtException', err => {
+  log({ level: 'error', msg: 'Uncaught Exception thrown:', error: err })
+  // It's generally recommended to gracefully shut down the process
+  // process.exit(1); // Uncomment if you want to exit on uncaught exceptions
+})
+
 process.on('SIGINT', async () => {
   await api.shutDown('SIGINT')
   process.exit(0)
