@@ -95,7 +95,8 @@ export class MCPService implements Resource {
     for (const server of this.list) {
       try {
         await this.connectToServer(server)
-        this.fetchToolsForServer(server)
+        // Now awaiting the fetchToolsForServer call to catch errors
+        await this.fetchToolsForServer(server)
       } catch (error) {
         log({
           level: 'error',
@@ -231,13 +232,19 @@ export class MCPService implements Resource {
   private async fetchToolsForServer(server: MCPServer) {
     const serverKey = sanitizeString(`${server.name}-${server.command}`)
     const connection = this.servers[serverKey]?.connection
-    if (!connection) return
+    if (!connection || !this.servers[serverKey] || this.servers[serverKey].status !== 'connected') {
+      return
+    }
 
     try {
       const requestOptions: RequestOptions = {}
-      if (server.startupTimeout) {
+      // Set a longer default timeout, which can be overridden by a specific startupTimeout
+      if (!server.startupTimeout) {
+        requestOptions.timeout = 120000 // 2 minutes
+      } else if (server.startupTimeout) {
         requestOptions.timeout = server.startupTimeout
       }
+
       const tools = await connection.client.request({ method: 'tools/list' }, ListToolsResultSchema, requestOptions)
       if (this.servers[serverKey]) {
         this.servers[serverKey].toolsList = tools.tools
@@ -246,12 +253,17 @@ export class MCPService implements Resource {
     } catch (error) {
       log({
         level: 'error',
-        msg: `[${server.name}] Failed to fetch tool list.`,
+        msg: `[${server.name}] Failed to fetch tool list. Disabling server.`,
         error: error
       })
+      // Gracefully handle the error by marking the server as 'error' and disabling it
+      // This prevents the entire application from crashing
       if (this.servers[serverKey]) {
         this.servers[serverKey].status = 'error'
+        this.servers[serverKey].enabled = false // Mark as disabled in memory
       }
+      // Also update the database to persist the disabled state
+      await this.mcpDBClient.update({ ...server, enabled: false }, { name: server.name })
     }
   }
 
