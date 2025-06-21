@@ -94,7 +94,8 @@ export class MCPService implements Resource {
     }))
     for (const server of this.list) {
       try {
-        await this.startMCPServer(server)
+        await this.connectToServer(server)
+        this.fetchToolsForServer(server)
       } catch (error) {
         log({
           level: 'error',
@@ -106,7 +107,7 @@ export class MCPService implements Resource {
     log({ level: 'info', msg: `MCPService initialized with ${this.list.length} servers` })
   }
 
-  private async startMCPServer(server: MCPServer) {
+  private async connectToServer(server: MCPServer) {
     const serverKey = sanitizeString(`${server.name}-${server.command}`)
     try {
       // If server is disabled, add it to this.servers with disconnected status but don't start it
@@ -198,17 +199,7 @@ export class MCPService implements Resource {
 
       this.servers[serverKey].connection!.client.connect(this.servers[serverKey].connection!.transport)
       this.servers[serverKey].status = 'connected'
-      const requestOptions: RequestOptions = {}
-      if (server.startupTimeout) {
-        requestOptions.timeout = server.startupTimeout
-      }
-      const tools = await this.servers[serverKey].connection!.client.request(
-        { method: 'tools/list' },
-        ListToolsResultSchema,
-        requestOptions
-      )
-      this.servers[serverKey].toolsList = tools.tools
-      log({ level: 'info', msg: `[${server.name}] Connected successfully.` })
+      log({ level: 'info', msg: `[${server.name}] Connected successfully. Will fetch tool list.` })
     } catch (error) {
       log({
         level: 'error',
@@ -233,6 +224,33 @@ export class MCPService implements Resource {
         server.enabled = false
         await this.mcpDBClient.update(server, { name: server.name })
         log({ level: 'info', msg: `Server ${server.name} has been disabled due to startup failure` })
+      }
+    }
+  }
+
+  private async fetchToolsForServer(server: MCPServer) {
+    const serverKey = sanitizeString(`${server.name}-${server.command}`)
+    const connection = this.servers[serverKey]?.connection
+    if (!connection) return
+
+    try {
+      const requestOptions: RequestOptions = {}
+      if (server.startupTimeout) {
+        requestOptions.timeout = server.startupTimeout
+      }
+      const tools = await connection.client.request({ method: 'tools/list' }, ListToolsResultSchema, requestOptions)
+      if (this.servers[serverKey]) {
+        this.servers[serverKey].toolsList = tools.tools
+        log({ level: 'info', msg: `[${server.name}] Successfully fetched tool list.` })
+      }
+    } catch (error) {
+      log({
+        level: 'error',
+        msg: `[${server.name}] Failed to fetch tool list.`,
+        error: error
+      })
+      if (this.servers[serverKey]) {
+        this.servers[serverKey].status = 'error'
       }
     }
   }
@@ -309,7 +327,8 @@ export class MCPService implements Resource {
     }
 
     await this.mcpDBClient.insert(server)
-    await this.startMCPServer(server)
+    await this.connectToServer(server)
+    this.fetchToolsForServer(server)
 
     return server
   }
@@ -385,8 +404,9 @@ export class MCPService implements Resource {
       }
     }
 
-    // Start the updated server (startMCPServer will respect the enabled flag)
-    await this.startMCPServer(updatedServer)
+    // Start the updated server (connectToServer will respect the enabled flag)
+    await this.connectToServer(updatedServer)
+    this.fetchToolsForServer(updatedServer)
 
     return updatedServer
   }
@@ -462,7 +482,8 @@ export class MCPService implements Resource {
       this.servers[serverKey].status === 'disconnected' ||
       this.servers[serverKey].status === 'error'
     ) {
-      await this.startMCPServer(server)
+      await this.connectToServer(server)
+      this.fetchToolsForServer(server)
     }
 
     return server
