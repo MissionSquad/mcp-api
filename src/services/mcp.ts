@@ -93,26 +93,33 @@ export class MCPService implements Resource {
       enabled: server.enabled !== false // Default to true if not set
     }))
     for (const server of this.list) {
-      await this.startMCPServer(server)
+      try {
+        await this.startMCPServer(server)
+      } catch (error) {
+        log({
+          level: 'error',
+          msg: `[${server.name}] Unhandled exception during server startup sequence.`,
+          error: error
+        })
+      }
     }
     log({ level: 'info', msg: `MCPService initialized with ${this.list.length} servers` })
   }
 
   private async startMCPServer(server: MCPServer) {
     const serverKey = sanitizeString(`${server.name}-${server.command}`)
-
-    // If server is disabled, add it to this.servers with disconnected status but don't start it
-    if (server.enabled === false) {
-      log({ level: 'info', msg: `Server ${server.name} is disabled, adding to servers list but not starting` })
-      this.servers[serverKey] = {
-        ...server,
-        status: 'disconnected',
-        logs: []
-      }
-      return
-    }
-
     try {
+      // If server is disabled, add it to this.servers with disconnected status but don't start it
+      if (server.enabled === false) {
+        log({ level: 'info', msg: `Server ${server.name} is disabled, adding to servers list but not starting` })
+        this.servers[serverKey] = {
+          ...server,
+          status: 'disconnected',
+          logs: []
+        }
+        return
+      }
+
       const client = new Client(
         { name: 'MSQStdioClient', version: '1.0.0' },
         { capabilities: { prompts: {}, resources: {}, tools: {} } }
@@ -136,14 +143,20 @@ export class MCPService implements Resource {
       }
 
       const transportCloseHandler = async () => {
-        log({ level: 'info', msg: `${serverKey} transport closed` })
+        log({ level: 'info', msg: `[${server.name}] Transport closed.` })
         if (this.servers[serverKey]) {
           this.servers[serverKey].status = 'disconnected'
           // Add a final log of all captured stderr logs for debugging
-          log({
-            level: 'info',
-            msg: `Final logs for ${serverKey}: ${JSON.stringify(this.servers[serverKey].logs, null, 2)}`
-          })
+          if (this.servers[serverKey].logs && this.servers[serverKey].logs!.length > 0) {
+            log({
+              level: 'info',
+              msg: `[${server.name}] Final captured logs before exit:\n ${JSON.stringify(
+                this.servers[serverKey].logs,
+                null,
+                2
+              )}`
+            })
+          }
         }
       }
 
@@ -166,10 +179,11 @@ export class MCPService implements Resource {
       this.servers[serverKey].connection?.transport.start()
       const stderrStream = this.servers[serverKey].connection?.transport.stderr
       if (stderrStream) {
+        log({ level: 'info', msg: `[${server.name}] Attaching stderr listener.` })
         // Create and store stderr data handler
         const stderrDataHandler = async (data: Buffer) => {
-          const logMsg = data.toString()
-          log({ level: 'error', msg: `${serverKey} stderr: ${logMsg}` })
+          const logMsg = data.toString().trim()
+          log({ level: 'error', msg: `[${server.name}] stderr: ${logMsg}` })
           if (this.servers[serverKey]) {
             this.servers[serverKey].logs?.push(logMsg)
           }
@@ -178,7 +192,7 @@ export class MCPService implements Resource {
         this.servers[serverKey].eventHandlers!.stderrDataHandler = stderrDataHandler
         stderrStream.on('data', stderrDataHandler)
       } else {
-        log({ level: 'error', msg: `${serverKey} stderr stream is null` })
+        log({ level: 'error', msg: `[${server.name}] stderr stream is null` })
       }
       this.servers[serverKey].connection!.transport.start = async () => {}
 
@@ -194,9 +208,17 @@ export class MCPService implements Resource {
         requestOptions
       )
       this.servers[serverKey].toolsList = tools.tools
-      log({ level: 'info', msg: `${serverKey} connected` })
+      log({ level: 'info', msg: `[${server.name}] Connected successfully.` })
     } catch (error) {
-      log({ level: 'error', msg: `Failed to start server ${server.name}: ${(error as any).message}` })
+      log({
+        level: 'error',
+        msg: `[${server.name}] Failed to start or connect to server.`,
+        error: error
+      })
+
+      if (this.servers[serverKey]) {
+        this.servers[serverKey].status = 'error'
+      }
 
       // Attempt to install missing package if PackageService is available
       let installSuccess = false
