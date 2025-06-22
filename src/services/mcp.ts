@@ -229,23 +229,35 @@ export class MCPService implements Resource {
     }
   }
 
-  private async fetchToolsForServer(server: MCPServer) {
+  private async fetchToolsForServer(
+    server: MCPServer,
+    retryCount = 0,
+    maxRetries = 3,
+    initialDelay = 5000
+  ) {
     const serverKey = sanitizeString(`${server.name}-${server.command}`)
     const connection = this.servers[serverKey]?.connection
+
     if (!connection || !this.servers[serverKey] || this.servers[serverKey].status !== 'connected') {
       return
     }
 
     try {
-      const requestOptions: RequestOptions = {}
-      // Set a longer default timeout, which can be overridden by a specific startupTimeout
-      if (!server.startupTimeout) {
-        requestOptions.timeout = 120000 // 2 minutes
-      } else if (server.startupTimeout) {
-        requestOptions.timeout = server.startupTimeout
+      const requestOptions: RequestOptions = {
+        // Respect the server-specific timeout, or default to 2 minutes.
+        timeout: server.startupTimeout || 120000,
+        maxTotalTimeout: 300000
       }
 
+      log({
+        level: 'info',
+        msg: `[${server.name}] Attempting to fetch tool list (Attempt ${
+          retryCount + 1
+        }/${maxRetries}) with timeout ${requestOptions.timeout}ms.`
+      })
+
       const tools = await connection.client.request({ method: 'tools/list' }, ListToolsResultSchema, requestOptions)
+
       if (this.servers[serverKey]) {
         this.servers[serverKey].toolsList = tools.tools
         log({ level: 'info', msg: `[${server.name}] Successfully fetched tool list.` })
@@ -253,17 +265,29 @@ export class MCPService implements Resource {
     } catch (error) {
       log({
         level: 'error',
-        msg: `[${server.name}] Failed to fetch tool list. Disabling server.`,
+        msg: `[${server.name}] Failed to fetch tool list on attempt ${retryCount + 1}.`,
         error: error
       })
-      // Gracefully handle the error by marking the server as 'error' and disabling it
-      // This prevents the entire application from crashing
-      if (this.servers[serverKey]) {
-        this.servers[serverKey].status = 'error'
-        this.servers[serverKey].enabled = false // Mark as disabled in memory
+
+      if (retryCount < maxRetries - 1) {
+        const delay = initialDelay * Math.pow(2, retryCount)
+        log({ level: 'info', msg: `[${server.name}] Retrying in ${delay / 1000} seconds...` })
+        await new Promise(resolve => setTimeout(resolve, delay))
+        // Important: await the recursive call to ensure the sequence is handled correctly.
+        await this.fetchToolsForServer(server, retryCount + 1, maxRetries, initialDelay)
+      } else {
+        log({
+          level: 'error',
+          msg: `[${server.name}] Max retries reached. Disabling server.`
+        })
+        // Gracefully handle the error by marking the server as 'error' and disabling it
+        if (this.servers[serverKey]) {
+          this.servers[serverKey].status = 'error'
+          this.servers[serverKey].enabled = false // Mark as disabled in memory
+        }
+        // Also update the database to persist the disabled state
+        await this.mcpDBClient.update({ ...server, enabled: false }, { name: server.name })
       }
-      // Also update the database to persist the disabled state
-      await this.mcpDBClient.update({ ...server, enabled: false }, { name: server.name })
     }
   }
 
