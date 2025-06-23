@@ -8,6 +8,7 @@ import { MCPController } from './controllers/mcp'
 import { PackagesController } from './controllers/packages'
 import { AuthController } from './controllers/auth'
 import { Secrets } from './services/secrets'
+import { registerBuiltInServers } from './builtin-servers'
 
 export type Resource = {
   init: () => Promise<void>
@@ -35,6 +36,9 @@ export class API {
 
   public async start() {
     const { app } = this
+
+    // Register built-in servers before initializing services
+    registerBuiltInServers()
 
     // Initialize Secrets service
     const secretsService = new Secrets({ mongoParams })
