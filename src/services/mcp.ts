@@ -6,6 +6,7 @@ import { CallToolResultSchema, ListToolsResultSchema } from '@modelcontextprotoc
 import { IndexDefinition, MongoConnectionParams, MongoDBClient } from '../utils/mongodb'
 import { Resource } from '..'
 import { Secrets } from './secrets'
+import { BuiltInServer, BuiltInServerRegistry } from '../builtin-servers'
 
 export interface MCPConnection {
   client: Client
@@ -83,8 +84,44 @@ export class MCPService implements Resource {
     this.packageService = packageService
   }
 
+  /**
+   * Convert a built-in server to MCPServer format for API consistency
+   */
+  private builtInToMCPServer(builtInServer: BuiltInServer): MCPServer {
+    return {
+      name: builtInServer.externalName, // Use external name for public-facing API
+      command: 'built-in', // Special marker
+      args: [],
+      env: {},
+      status: 'connected', // Built-in servers are always "connected"
+      enabled: true, // Built-in servers are always enabled
+      toolsList: builtInServer.tools.map(tool => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema
+      }))
+    }
+  }
+
   public async init() {
     await this.mcpDBClient.connect('mcp')
+
+    // Initialize built-in servers
+    const builtInRegistry = BuiltInServerRegistry.getInstance()
+    await builtInRegistry.initAll()
+
+    // Add built-in servers to the servers map
+    for (const builtInServer of builtInRegistry.list()) {
+      const mcpServer = this.builtInToMCPServer(builtInServer)
+      const serverKey = sanitizeString(`${builtInServer.name}-built-in`)
+      this.servers[serverKey] = mcpServer
+      this.serverKeys.push(serverKey)
+      log({
+        level: 'info',
+        msg: `Added built-in server to registry: ${builtInServer.name}`
+      })
+    }
+
     // No need to init secrets here, it will be done at a higher level
     const list = await this.mcpDBClient.find({})
     this.list = (list ?? []).map(({ _id, ...server }) => ({
@@ -233,7 +270,7 @@ export class MCPService implements Resource {
     server: MCPServer,
     retryCount = 0,
     maxRetries = 3,
-    initialDelay = 5000
+    initialDelay = 120000
   ) {
     const serverKey = sanitizeString(`${server.name}-${server.command}`)
     const connection = this.servers[serverKey]?.connection
@@ -244,8 +281,8 @@ export class MCPService implements Resource {
 
     try {
       const requestOptions: RequestOptions = {
-        // Respect the server-specific timeout, or default to 2 minutes.
-        timeout: server.startupTimeout || 120000,
+        // Respect the server-specific timeout, or default to 3 minutes.
+        timeout: server.startupTimeout || 180000,
         maxTotalTimeout: 300000
       }
 
@@ -292,6 +329,34 @@ export class MCPService implements Resource {
   }
 
   public async callTool(username: string, serverName: string, methodName: string, args: Record<string, unknown>) {
+    // Check if it's a built-in server first by its external name
+    const builtInRegistry = BuiltInServerRegistry.getInstance()
+    if (builtInRegistry.isBuiltInByExternalName(serverName)) {
+      const builtInServer = builtInRegistry.getByExternalName(serverName)
+      if (!builtInServer) {
+        log({ level: 'error', msg: `Built-in server with external name ${serverName} not found in registry` })
+        return undefined
+      }
+
+      log({ level: 'info', msg: `Calling built-in tool - ${serverName}:${methodName}` })
+
+      // Apply secrets if any (built-in servers can still use secrets)
+      const secrets = await this.secretsService.getSecrets(username, serverName)
+      if (secrets[serverName] != null) {
+        args = { ...args, ...secrets[serverName] }
+        log({
+          level: 'info',
+          msg: `Secrets applied to built-in tool call - ${serverName}:${methodName}`
+        })
+      }
+
+      // Call the built-in server directly
+      const toolResponse = await builtInServer.callTool(methodName, args)
+      log({ level: 'info', msg: `Built-in tool called - ${serverName}:${methodName}` })
+
+      return toolResponse
+    }
+
     const server = Object.values(this.servers).find(server => server.name === serverName)
     if (!server) {
       log({ level: 'error', msg: `Server ${serverName} not found` })
@@ -346,6 +411,12 @@ export class MCPService implements Resource {
   }): Promise<MCPServer> {
     const { name, command, args = [], env = {}, enabled = true, startupTimeout } = serverData
 
+    // Prevent adding servers that conflict with built-in external names
+    const builtInRegistry = BuiltInServerRegistry.getInstance()
+    if (builtInRegistry.isBuiltInByExternalName(name)) {
+      throw new Error(`Cannot add server with name '${name}' as it conflicts with a built-in server.`)
+    }
+
     // Check if server with this name already exists
     const existingServer = await this.mcpDBClient.findOne({ name })
     if (existingServer) {
@@ -379,6 +450,12 @@ export class MCPService implements Resource {
       startupTimeout?: number
     }
   ): Promise<MCPServer | null> {
+    // Prevent updating built-in servers
+    const builtInRegistry = BuiltInServerRegistry.getInstance()
+    if (builtInRegistry.isBuiltInByExternalName(name)) {
+      throw new Error(`Cannot update built-in server ${name}`)
+    }
+
     const existingServer = await this.mcpDBClient.findOne({ name })
     if (!existingServer) {
       throw new Error(`Server with name ${name} not found`)
@@ -448,6 +525,12 @@ export class MCPService implements Resource {
   }
 
   public async deleteServer(name: string): Promise<void> {
+    // Prevent deleting built-in servers
+    const builtInRegistry = BuiltInServerRegistry.getInstance()
+    if (builtInRegistry.isBuiltInByExternalName(name)) {
+      throw new Error(`Cannot delete built-in server ${name}`)
+    }
+
     const existingServer = await this.mcpDBClient.findOne({ name })
     if (!existingServer) {
       throw new Error(`Server with name ${name} not found`)
@@ -494,10 +577,25 @@ export class MCPService implements Resource {
   }
 
   public async getServer(name: string): Promise<MCPServer | null> {
+    // Check built-in servers first by external name
+    const builtInRegistry = BuiltInServerRegistry.getInstance()
+    if (builtInRegistry.isBuiltInByExternalName(name)) {
+      const builtInServer = builtInRegistry.getByExternalName(name)
+      if (builtInServer) {
+        return this.builtInToMCPServer(builtInServer)
+      }
+    }
+
     return this.mcpDBClient.findOne({ name })
   }
 
   public async enableServer(name: string): Promise<MCPServer | null> {
+    // Built-in servers are always enabled
+    const builtInRegistry = BuiltInServerRegistry.getInstance()
+    if (builtInRegistry.isBuiltInByExternalName(name)) {
+      return this.getServer(name)
+    }
+
     const server = await this.mcpDBClient.findOne({ name })
     if (!server) {
       throw new Error(`Server ${name} not found`)
@@ -526,6 +624,12 @@ export class MCPService implements Resource {
   }
 
   public async disableServer(name: string): Promise<MCPServer | null> {
+    // Cannot disable built-in servers
+    const builtInRegistry = BuiltInServerRegistry.getInstance()
+    if (builtInRegistry.isBuiltInByExternalName(name)) {
+      throw new Error(`Cannot disable built-in server ${name}`)
+    }
+
     const server = await this.mcpDBClient.findOne({ name })
     if (!server) {
       throw new Error(`Server ${name} not found`)
@@ -579,6 +683,11 @@ export class MCPService implements Resource {
 
   public async stop() {
     log({ level: 'info', msg: 'Stopping MCP servers' })
+
+    // Stop built-in servers
+    const builtInRegistry = BuiltInServerRegistry.getInstance()
+    await builtInRegistry.stopAll()
+
     for (const serverKey in this.servers) {
       const serverStatus = this.servers[serverKey].status
       if (serverStatus != 'disconnected') {

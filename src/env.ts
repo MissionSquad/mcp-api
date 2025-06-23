@@ -16,5 +16,6 @@ export const env = {
   INSTALL_ON_START: (process.env.INSTALL_ON_START || '@missionsquad/mcp-github|github,@missionsquad/mcp-helper-tools|helper-tools').split(',').map((pkg) => {
     const [repo, name] = pkg.split('|')
     return { repo, name }
-  })
+  }),
+  SEARXNG_URL: process.env.SEARXNG_URL
 }
