@@ -5,7 +5,6 @@ import { log } from '../utils/general'
 
 export interface UserSecret {
   username: string
-  server: string
   key: string
   value: string
 }
@@ -32,33 +31,28 @@ export class Secrets {
     await this.secretsDBClient.connect(env.SECRETS_DBNAME)
   }
 
-  public async getSecrets(username: string, server: string) {
+  public async getSecrets(username: string) {
     log({ level: 'info', msg: `get secrets for user ${username}` })
     if (this.secretsDBClient == null) {
       throw new Error('secretsDBClient is not initialized')
     }
-    const userSecrets = await this.secretsDBClient.find({ username, server })
-    // { 'mcp-server-name': { 'secretName': 'secretValue' } }
-    const secrets: Record<string, Record<string, string>> = userSecrets.reduce((acc, secret) => {
+    const userSecrets = await this.secretsDBClient.find({ username })
+    // { 'secretName': 'secretValue' }
+    const secrets: Record<string, string> = userSecrets.reduce((acc, secret) => {
       const decryptedSecretValue = this.secrets.decrypt(secret.value)
-      if (acc[secret.server] == null) {
-        acc[secret.server] = {}
-      }
-      acc[secret.server][secret.key] = decryptedSecretValue
+      acc[secret.key] = decryptedSecretValue
       return acc
-    }, {} as Record<string, Record<string, string>>)
+    }, {} as Record<string, string>)
     return secrets
   }
 
   public async updateSecret({
     username,
-    serverName,
     secretName,
     secretValue,
     action
   }: {
     username: string
-    serverName: string
     secretName: string
     secretValue: string
     action: 'save' | 'update' | 'delete'
@@ -69,19 +63,17 @@ export class Secrets {
 
     switch (action) {
       case 'delete':
-        await this.secretsDBClient.delete({ username, server: serverName, key: secretName })
+        await this.secretsDBClient.delete({ username, key: secretName })
         break
       case 'save':
       case 'update':
         const encryptedSecretValue = this.secrets.encrypt(secretValue)
         await this.secretsDBClient.upsert({
           username,
-          server: serverName,
           key: secretName,
           value: encryptedSecretValue
         }, {
           username,
-          server: serverName,
           key: secretName
         })
         break

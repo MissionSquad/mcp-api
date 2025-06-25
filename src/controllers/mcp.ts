@@ -134,8 +134,8 @@ export class MCPController implements Resource {
       // 2. Check if the server has declared it needs Google OAuth2 tokens
       if (authType === 'OAUTH2_GOOGLE' && !methodName.startsWith('auth_')) {
         // 3. Retrieve the encrypted tokens using the Secrets service
-        const userSecrets = await this.mcpService.secretsService.getSecrets(username, serverName)
-        const googleTokensString = userSecrets[serverName]?.google_tokens
+        const userSecrets = await this.mcpService.secretsService.getSecrets(username)
+        const googleTokensString = userSecrets?.google_tokens
 
         if (!googleTokensString) {
           throw new Error(`Google tokens not found for user ${username}. Please authenticate.`)
@@ -168,10 +168,10 @@ export class MCPController implements Resource {
   public async setSecret(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const body = req.body as SetSecretRequest
-      const { serverName, secretName, secretValue } = body
+      const { secretName, secretValue } = body
       const username = body.username ?? 'default'
-      await this.mcpService.setSecret(username, serverName, secretName, secretValue)
-      log({ level: 'info', msg: `set secret ${secretName} on server ${serverName}` })
+      await this.mcpService.setSecret(username, secretName, secretValue)
+      log({ level: 'info', msg: `set secret ${secretName}` })
       res.json({ success: true })
     } catch (error) {
       res.status(500).json({ success: false, error: (error as Error).message })
@@ -181,9 +181,9 @@ export class MCPController implements Resource {
   public async deleteSecret(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const body = req.body as DeleteSecretRequest
-      const { serverName, secretName } = body
+      const { secretName } = body
       const username = body.username ?? 'default'
-      await this.mcpService.deleteSecret(username, serverName, secretName)
+      await this.mcpService.deleteSecret(username, secretName)
       res.json({ success: true })
     } catch (error) {
       res.status(500).json({ success: false, error: (error as Error).message })
