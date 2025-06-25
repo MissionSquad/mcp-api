@@ -341,9 +341,9 @@ export class MCPService implements Resource {
       log({ level: 'info', msg: `Calling built-in tool - ${serverName}:${methodName}` })
 
       // Apply secrets if any (built-in servers can still use secrets)
-      const secrets = await this.secretsService.getSecrets(username, serverName)
-      if (secrets[serverName] != null) {
-        args = { ...args, ...secrets[serverName] }
+      const secrets = await this.secretsService.getSecrets(username)
+      if (secrets != null) {
+        args = { ...args, ...secrets }
         log({
           level: 'info',
           msg: `Secrets applied to built-in tool call - ${serverName}:${methodName}`
@@ -366,9 +366,9 @@ export class MCPService implements Resource {
       log({ level: 'error', msg: `Server ${serverName} not connected. Status: ${server.status}` })
       return undefined
     }
-    const secrets = await this.secretsService.getSecrets(username, serverName)
-    if (secrets[serverName] != null) {
-      args = { ...args, ...secrets[serverName] }
+    const secrets = await this.secretsService.getSecrets(username)
+    if (secrets != null) {
+      args = { ...args, ...secrets }
       log({
         level: 'info',
         msg: `Secrets applied to tool call - ${serverName}:${methodName} - ${Object.keys(secrets).join(', ')}`
@@ -393,12 +393,12 @@ export class MCPService implements Resource {
     return toolResponse
   }
 
-  public async setSecret(username: string, serverName: string, secretName: string, secretValue: string) {
-    await this.secretsService.updateSecret({ username, serverName, secretName, secretValue, action: 'update' })
+  public async setSecret(username: string, secretName: string, secretValue: string) {
+    await this.secretsService.updateSecret({ username, secretName, secretValue, action: 'update' })
   }
 
-  public async deleteSecret(username: string, serverName: string, secretName: string) {
-    await this.secretsService.updateSecret({ username, serverName, secretName, secretValue: '', action: 'delete' })
+  public async deleteSecret(username: string, secretName: string) {
+    await this.secretsService.updateSecret({ username, secretName, secretValue: '', action: 'delete' })
   }
 
   public async addServer(serverData: {

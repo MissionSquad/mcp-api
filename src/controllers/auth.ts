@@ -56,7 +56,6 @@ export class AuthController {
       // Use the existing Secrets service to store the tokens
       await this.secretsService.updateSecret({
         username: userId,
-        serverName: 'mcp-google-workspace',
         secretName: 'google_tokens', // Use a consistent key
         secretValue: tokensString, // Store the full JSON string
         action: 'update'
