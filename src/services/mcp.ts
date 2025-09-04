@@ -36,6 +36,7 @@ export interface MCPServer {
   command: string
   args: string[]
   env: Record<string, string>
+  secretName?: string
   status: 'connected' | 'connecting' | 'disconnected' | 'error'
   enabled: boolean
   startupTimeout?: number
@@ -406,10 +407,11 @@ export class MCPService implements Resource {
     command: string
     args?: string[]
     env?: Record<string, string>
+    secretName?: string
     enabled?: boolean
     startupTimeout?: number
   }): Promise<MCPServer> {
-    const { name, command, args = [], env = {}, enabled = true, startupTimeout } = serverData
+    const { name, command, args = [], env = {}, secretName, enabled = true, startupTimeout } = serverData
 
     // Prevent adding servers that conflict with built-in external names
     const builtInRegistry = BuiltInServerRegistry.getInstance()
@@ -428,6 +430,7 @@ export class MCPService implements Resource {
       command,
       args,
       env,
+      secretName,
       status: 'disconnected',
       enabled,
       startupTimeout
@@ -446,6 +449,7 @@ export class MCPService implements Resource {
       command?: string
       args?: string[]
       env?: Record<string, string>
+      secretName?: string
       enabled?: boolean
       startupTimeout?: number
     }

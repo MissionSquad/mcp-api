@@ -31,6 +31,7 @@ export interface InstallPackageRequest {
   command?: string
   args?: string[]
   env?: Record<string, string>
+  secretName?: string
   enabled?: boolean
   failOnWarning?: boolean
 }
@@ -136,7 +137,7 @@ export class PackageService {
     server?: MCPServer
     error?: string
   }> {
-    const { name, version, serverName, command, args = [], env = {}, enabled = true, failOnWarning = false } = request
+    const { name, version, serverName, command, args = [], env = {}, secretName, enabled = true, failOnWarning = false } = request
 
     // Validate package name to prevent command injection
     if (!/^[@a-z0-9-_\/\.]+$/.test(name)) {
@@ -264,6 +265,7 @@ export class PackageService {
         command: finalCommand,
         args,
         env,
+        secretName,
         enabled
       })
 
