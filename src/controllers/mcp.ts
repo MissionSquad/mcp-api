@@ -88,11 +88,12 @@ export class MCPController implements Resource {
   private getServers(req: Request, res: Response, next: NextFunction): void {
     try {
       const servers = Object.values(this.mcpService.servers).map(
-        ({ name, command, args, env, status, enabled, toolsList, logs }) => ({
+        ({ name, command, args, env, secretName, status, enabled, toolsList, logs }) => ({
           name,
           command,
           args,
           env,
+          secretName,
           status,
           enabled,
           toolsList,
