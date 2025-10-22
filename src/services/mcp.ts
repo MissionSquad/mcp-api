@@ -36,7 +36,8 @@ export interface MCPServer {
   command: string
   args: string[]
   env: Record<string, string>
-  secretName?: string
+  secretName?: string        // ← KEEP for backward compatibility
+  secretNames?: string[]     // ← ADD new property
   status: 'connected' | 'connecting' | 'disconnected' | 'error'
   enabled: boolean
   startupTimeout?: number
@@ -86,6 +87,45 @@ export class MCPService implements Resource {
   }
 
   /**
+   * Migrates old secretName format to new secretNames format
+   * Also persists the migrated version back to database
+   * This enables seamless backward compatibility during transition
+   */
+  private async migrateServerSecrets(server: MCPServer): Promise<MCPServer> {
+    // If already using new format, return as-is
+    if (server.secretNames && server.secretNames.length > 0) {
+      return server
+    }
+    
+    // If has old format, migrate
+    if (server.secretName && !server.secretNames) {
+      const migratedServer = {
+        ...server,
+        secretNames: [server.secretName],
+        secretName: undefined  // Remove old property from in-memory object
+      }
+      
+      // Persist migration to DB asynchronously (don't block)
+      this.mcpDBClient.update(migratedServer, { name: server.name }).catch(err => {
+        log({ 
+          level: 'warn', 
+          msg: `Failed to auto-migrate server ${server.name}: ${err.message}` 
+        })
+      })
+      
+      log({ 
+        level: 'info', 
+        msg: `Auto-migrated server ${server.name} from secretName to secretNames` 
+      })
+      
+      return migratedServer
+    }
+    
+    // No secrets configured
+    return server
+  }
+
+  /**
    * Convert a built-in server to MCPServer format for API consistency
    */
   private builtInToMCPServer(builtInServer: BuiltInServer): MCPServer {
@@ -130,6 +170,12 @@ export class MCPService implements Resource {
       status: 'disconnected',
       enabled: server.enabled !== false // Default to true if not set
     }))
+    
+    // Auto-migrate old format to new format
+    for (let i = 0; i < this.list.length; i++) {
+      this.list[i] = await this.migrateServerSecrets(this.list[i])
+    }
+    
     for (const server of this.list) {
       try {
         await this.connectToServer(server)
@@ -407,11 +453,18 @@ export class MCPService implements Resource {
     command: string
     args?: string[]
     env?: Record<string, string>
-    secretName?: string
+    secretName?: string        // ← KEEP for backward compatibility
+    secretNames?: string[]     // ← ADD new property
     enabled?: boolean
     startupTimeout?: number
   }): Promise<MCPServer> {
-    const { name, command, args = [], env = {}, secretName, enabled = true, startupTimeout } = serverData
+    const { name, command, args = [], env = {}, secretName, secretNames, enabled = true, startupTimeout } = serverData
+
+    // Normalize: prefer secretNames, but handle secretName for backward compat
+    let finalSecretNames = secretNames
+    if (!finalSecretNames && secretName) {
+      finalSecretNames = [secretName]
+    }
 
     // Prevent adding servers that conflict with built-in external names
     const builtInRegistry = BuiltInServerRegistry.getInstance()
@@ -430,7 +483,8 @@ export class MCPService implements Resource {
       command,
       args,
       env,
-      secretName,
+      secretNames: finalSecretNames,  // Use normalized value
+      secretName: undefined,          // Don't save old format for new servers
       status: 'disconnected',
       enabled,
       startupTimeout
@@ -449,7 +503,8 @@ export class MCPService implements Resource {
       command?: string
       args?: string[]
       env?: Record<string, string>
-      secretName?: string
+      secretName?: string        // ← KEEP for backward compatibility
+      secretNames?: string[]     // ← ADD new property
       enabled?: boolean
       startupTimeout?: number
     }
@@ -465,6 +520,12 @@ export class MCPService implements Resource {
       throw new Error(`Server with name ${name} not found`)
     }
 
+    // Normalize secrets if provided in update
+    let finalSecretNames = serverData.secretNames
+    if (!finalSecretNames && serverData.secretName) {
+      finalSecretNames = [serverData.secretName]
+    }
+
     // Check if enabled state is changing
     const enabledChanged = serverData.enabled !== undefined && serverData.enabled !== existingServer.enabled
 
@@ -472,6 +533,8 @@ export class MCPService implements Resource {
       ...existingServer,
       ...serverData,
       name, // Ensure name doesn't change
+      secretNames: finalSecretNames ?? existingServer.secretNames,
+      secretName: undefined,  // Remove old format when updating
       startupTimeout: serverData.startupTimeout ?? existingServer.startupTimeout
     }
 

@@ -30,6 +30,8 @@ export interface AddServerRequest {
   command: string
   args?: string[]
   env?: Record<string, string>
+  secretName?: string        // ← KEEP for backward compatibility
+  secretNames?: string[]     // ← ADD new property
   enabled?: boolean
   startupTimeout?: number
 }
@@ -38,6 +40,8 @@ export interface UpdateServerRequest {
   command?: string
   args?: string[]
   env?: Record<string, string>
+  secretName?: string        // ← KEEP for backward compatibility
+  secretNames?: string[]     // ← ADD new property
   enabled?: boolean
   startupTimeout?: number
 }
@@ -88,12 +92,13 @@ export class MCPController implements Resource {
   private getServers(req: Request, res: Response, next: NextFunction): void {
     try {
       const servers = Object.values(this.mcpService.servers).map(
-        ({ name, command, args, env, secretName, status, enabled, toolsList, logs }) => ({
+        ({ name, command, args, env, secretNames, status, enabled, toolsList, logs }) => ({
           name,
           command,
           args,
           env,
-          secretName,
+          secretNames,  // Only return new format (migration already happened)
+          // secretName is intentionally excluded from response
           status,
           enabled,
           toolsList,
