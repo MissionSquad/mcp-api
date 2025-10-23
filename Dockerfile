@@ -49,6 +49,11 @@ RUN apt-get update \
 # Set Puppeteer to use installed Chromium
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
+# Install Bun
+RUN curl -fsSL https://bun.sh/install | bash
+ENV BUN_INSTALL="/root/.bun"
+ENV PATH="$BUN_INSTALL/bin:$PATH"
+
 # Create app directory
 WORKDIR /app
 
