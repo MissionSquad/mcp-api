@@ -1,5 +1,6 @@
 import { Express, NextFunction, Request, RequestHandler, Response } from 'express'
 import { MCPService } from '../services/mcp'
+import type { AddServerInput, UpdateServerInput } from '../services/mcp'
 import { MongoConnectionParams } from '../utils/mongodb'
 import { Resource } from '..'
 import { log } from '../utils/general'
@@ -25,26 +26,9 @@ export interface DeleteSecretRequest {
   secretName: string
 }
 
-export interface AddServerRequest {
-  name: string
-  command: string
-  args?: string[]
-  env?: Record<string, string>
-  secretName?: string        // ← KEEP for backward compatibility
-  secretNames?: string[]     // ← ADD new property
-  enabled?: boolean
-  startupTimeout?: number
-}
+export type AddServerRequest = AddServerInput
 
-export interface UpdateServerRequest {
-  command?: string
-  args?: string[]
-  env?: Record<string, string>
-  secretName?: string        // ← KEEP for backward compatibility
-  secretNames?: string[]     // ← ADD new property
-  enabled?: boolean
-  startupTimeout?: number
-}
+export type UpdateServerRequest = UpdateServerInput
 
 export class MCPController implements Resource {
   private app: Express
@@ -91,20 +75,36 @@ export class MCPController implements Resource {
 
   private getServers(req: Request, res: Response, next: NextFunction): void {
     try {
-      const servers = Object.values(this.mcpService.servers).map(
-        ({ name, command, args, env, secretNames, status, enabled, toolsList, logs }) => ({
-          name,
-          command,
-          args,
-          env,
-          secretNames,  // Only return new format (migration already happened)
+      const servers = Object.values(this.mcpService.servers).map(server => {
+        const base = {
+          name: server.name,
+          transportType: server.transportType,
+          secretNames: server.secretNames, // Only return new format (migration already happened)
           // secretName is intentionally excluded from response
-          status,
-          enabled,
-          toolsList,
-          logs
-        })
-      )
+          status: server.status,
+          enabled: server.enabled,
+          startupTimeout: server.startupTimeout,
+          toolsList: server.toolsList,
+          logs: server.logs
+        }
+
+        if (server.transportType === 'stdio') {
+          return {
+            ...base,
+            command: server.command,
+            args: server.args,
+            env: server.env
+          }
+        }
+
+        return {
+          ...base,
+          url: server.url,
+          headers: server.headers,
+          sessionId: server.sessionId,
+          reconnectionOptions: server.reconnectionOptions
+        }
+      })
       log({ level: 'info', msg: 'sending servers list' })
       res.json({ success: true, servers })
     } catch (error) {
@@ -135,7 +135,7 @@ export class MCPController implements Resource {
 
       // 1. Get the server's configuration from the MCPService
       const server = await this.mcpService.getServer(serverName)
-      const authType = server?.env?.MCP_AUTH_TYPE
+      const authType = server && server.transportType === 'stdio' ? server.env?.MCP_AUTH_TYPE : undefined
 
       // 2. Check if the server has declared it needs Google OAuth2 tokens
       if (authType === 'OAUTH2_GOOGLE' && !methodName.startsWith('auth_')) {
