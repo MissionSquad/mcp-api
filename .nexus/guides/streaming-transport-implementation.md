@@ -273,6 +273,15 @@ Update `openapi-mcp.json`:
 - Add `headers`, `sessionId`, and `reconnectionOptions` for Streamable HTTP (if you expose them via API).
 - Add `transportType` to package install request schemas to allow override during install.
 
+## Package Upgrades (Required)
+HTTP servers installed via `PackageService.installPackage` must be upgradeable without uninstall/reinstall. Implement upgrade support for `streamable_http` packages with the same `npm install <pkg>@version` flow used for stdio packages.
+
+Requirements:
+1. Allow `PackageService.upgradePackage` to proceed for both `stdio` and `streamable_http`.
+2. For `streamable_http`, perform the npm upgrade and update `PackageInfo` version fields, but do not attempt stdio-specific command/args rewrites.
+3. Preserve the existing server configuration (`url`, `headers`, `sessionId`, `reconnectionOptions`) and re-enable the server if it was enabled before the upgrade.
+4. Keep upgrade logic DRY and aligned with the stdio flow, while only branching where stdio-specific command resolution is required.
+
 ## Testing Plan (Required)
 ### Unit Tests
 - Verify transport selection by server config.

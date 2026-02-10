@@ -556,13 +556,6 @@ export class PackageService {
         await this.packagesDBClient.update(packageInfo, { mcpServerId: serverName })
         return { success: false, error: packageInfo.error }
       }
-      if (server.transportType !== 'stdio') {
-        packageInfo.status = 'error'
-        packageInfo.error = `Package upgrades are only supported for stdio servers.`
-        await this.packagesDBClient.update(packageInfo, { mcpServerId: serverName })
-        return { success: false, error: packageInfo.error }
-      }
-
       // Disable server temporarily
       const wasEnabled = server.enabled
       if (wasEnabled) {
@@ -597,75 +590,76 @@ export class PackageService {
         packageInfo.lastUpgraded = new Date()
         packageInfo.updateAvailable = false
 
-        // Check if the package structure has changed
-        let serverUpdateNeeded = false
-        let newCommand = server.command
-        let newArgs = [...server.args]
-
-        // Check if the package has bin entries
-        if (nodeModulesPackageJson.bin) {
-          // If bin is a string, use that
-          if (typeof nodeModulesPackageJson.bin === 'string') {
-            newCommand = 'node'
-            // Replace the first arg with the new path
-            if (newArgs.length > 0) {
-              const relativePackageDir = path.relative(process.cwd(), packageDir)
-              newArgs[0] = `./${path.join(
-                relativePackageDir,
-                'node_modules',
-                packageInfo.name,
-                nodeModulesPackageJson.bin
-              )}`
-              serverUpdateNeeded = true
-            }
-          }
-          // If bin is an object, use the first entry
-          else if (typeof nodeModulesPackageJson.bin === 'object') {
-            const binName = Object.keys(nodeModulesPackageJson.bin)[0]
-            newCommand = 'node'
-            // Replace the first arg with the new path
-            if (newArgs.length > 0) {
-              const relativePackageDir = path.relative(process.cwd(), packageDir)
-              newArgs[0] = `./${path.join(
-                relativePackageDir,
-                'node_modules',
-                packageInfo.name,
-                nodeModulesPackageJson.bin[binName]
-              )}`
-              serverUpdateNeeded = true
-            }
-          }
-        }
-        // Fall back to main file
-        else if (nodeModulesPackageJson.main) {
-          newCommand = 'node'
-          // Replace the first arg with the new path
-          if (newArgs.length > 0) {
-            const relativePackageDir = path.relative(process.cwd(), packageDir)
-            newArgs[0] = `./${path.join(
-              relativePackageDir,
-              'node_modules',
-              packageInfo.name,
-              nodeModulesPackageJson.main
-            )}`
-            serverUpdateNeeded = true
-          }
-        }
-
-        // Update server configuration if needed
         let updatedServer: MCPServer = server
-        if (serverUpdateNeeded) {
-          const updatedServerResult = await this.mcpService.updateServer(serverName, {
-            command: newCommand,
-            args: newArgs
-          })
-          if (!updatedServerResult) {
-            throw new Error(`Failed to update server configuration for ${serverName}`)
+        if (server.transportType === 'stdio') {
+          // Check if the package structure has changed
+          let serverUpdateNeeded = false
+          let newCommand = server.command
+          let newArgs = [...server.args]
+
+          // Check if the package has bin entries
+          if (nodeModulesPackageJson.bin) {
+            // If bin is a string, use that
+            if (typeof nodeModulesPackageJson.bin === 'string') {
+              newCommand = 'node'
+              // Replace the first arg with the new path
+              if (newArgs.length > 0) {
+                const relativePackageDir = path.relative(process.cwd(), packageDir)
+                newArgs[0] = `./${path.join(
+                  relativePackageDir,
+                  'node_modules',
+                  packageInfo.name,
+                  nodeModulesPackageJson.bin
+                )}`
+                serverUpdateNeeded = true
+              }
+            }
+            // If bin is an object, use the first entry
+            else if (typeof nodeModulesPackageJson.bin === 'object') {
+              const binName = Object.keys(nodeModulesPackageJson.bin)[0]
+              newCommand = 'node'
+              // Replace the first arg with the new path
+              if (newArgs.length > 0) {
+                const relativePackageDir = path.relative(process.cwd(), packageDir)
+                newArgs[0] = `./${path.join(
+                  relativePackageDir,
+                  'node_modules',
+                  packageInfo.name,
+                  nodeModulesPackageJson.bin[binName]
+                )}`
+                serverUpdateNeeded = true
+              }
+            }
           }
-          if (updatedServerResult.transportType !== 'stdio') {
-            throw new Error(`Updated server ${serverName} is not stdio; upgrade cannot continue.`)
+          // Fall back to main file
+          else if (nodeModulesPackageJson.main) {
+            newCommand = 'node'
+            // Replace the first arg with the new path
+            if (newArgs.length > 0) {
+              const relativePackageDir = path.relative(process.cwd(), packageDir)
+              newArgs[0] = `./${path.join(
+                relativePackageDir,
+                'node_modules',
+                packageInfo.name,
+                nodeModulesPackageJson.main
+              )}`
+              serverUpdateNeeded = true
+            }
           }
-          updatedServer = updatedServerResult
+
+          if (serverUpdateNeeded) {
+            const updatedServerResult = await this.mcpService.updateServer(serverName, {
+              command: newCommand,
+              args: newArgs
+            })
+            if (!updatedServerResult) {
+              throw new Error(`Failed to update server configuration for ${serverName}`)
+            }
+            if (updatedServerResult.transportType !== 'stdio') {
+              throw new Error(`Updated server ${serverName} is not stdio; upgrade cannot continue.`)
+            }
+            updatedServer = updatedServerResult
+          }
         }
 
         // Re-enable server if it was enabled before
@@ -674,8 +668,8 @@ export class PackageService {
           if (!enabledServer) {
             throw new Error(`Failed to re-enable server ${serverName} after upgrade`)
           }
-          if (enabledServer.transportType !== 'stdio') {
-            throw new Error(`Re-enabled server ${serverName} is not stdio; upgrade cannot continue.`)
+          if (enabledServer.transportType !== server.transportType) {
+            throw new Error(`Re-enabled server ${serverName} transport type changed during upgrade.`)
           }
           updatedServer = enabledServer
         }
