@@ -9,6 +9,7 @@ import { PackagesController } from './controllers/packages'
 import { AuthController } from './controllers/auth'
 import { Secrets } from './services/secrets'
 import { registerBuiltInServers } from './builtin-servers'
+import { McpOAuthTokens } from './services/oauthTokens'
 
 export type Resource = {
   init: () => Promise<void>
@@ -43,9 +44,13 @@ export class API {
     // Initialize Secrets service
     const secretsService = new Secrets({ mongoParams })
     await secretsService.init()
+
+    // Initialize OAuth token store
+    const oauthTokensService = new McpOAuthTokens({ mongoParams })
+    await oauthTokensService.init()
     
     // Initialize MCP controller
-    const mcpController = new MCPController({ app, mongoParams, secretsService })
+    const mcpController = new MCPController({ app, mongoParams, secretsService, oauthTokensService })
     await mcpController.init()
     mcpController.registerRoutes()
     this.resources.push(mcpController)

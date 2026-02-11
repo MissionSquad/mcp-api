@@ -6,6 +6,7 @@ import {
   StreamableHTTPError
 } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
+import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
 import { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js'
 import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { CallToolResultSchema, ListToolsResultSchema } from '@modelcontextprotocol/sdk/types.js'
@@ -14,6 +15,8 @@ import { BuiltInServer, BuiltInServerRegistry } from '../builtin-servers'
 import { log, sanitizeString } from '../utils/general'
 import { IndexDefinition, MongoConnectionParams, MongoDBClient } from '../utils/mongodb'
 import { Secrets } from './secrets'
+import { McpOAuthClientProvider, McpOAuthTokens } from './oauthTokens'
+import type { McpOAuthTokenInput } from './oauthTokens'
 
 export interface MCPConnection {
   client: Client
@@ -170,13 +173,42 @@ const shouldFallbackToSse = (error: unknown): boolean => {
   return status === 400 || status === 404 || status === 405
 }
 
-export const createTransport = (server: MCPServer): Transport => {
+const stripAuthorizationHeaders = (
+  headers?: Record<string, string>
+): Record<string, string> | undefined => {
+  if (!headers) {
+    return undefined
+  }
+  const next: Record<string, string> = {}
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === 'authorization') {
+      continue
+    }
+    next[key] = value
+  }
+  return next
+}
+
+const buildRequestInit = (headers?: Record<string, string>): RequestInit | undefined => {
+  if (!headers) {
+    return undefined
+  }
+  return { headers }
+}
+
+export type TransportFactoryOptions = {
+  requestInit?: RequestInit
+  authProvider?: OAuthClientProvider
+}
+
+export const createTransport = (server: MCPServer, options: TransportFactoryOptions = {}): Transport => {
   if (server.transportType === 'streamable_http') {
-    const requestInit = server.headers ? { headers: server.headers } : undefined
+    const requestInit = options.requestInit ?? buildRequestInit(server.headers)
     return new StreamableHTTPClientTransport(new URL(server.url), {
       requestInit,
       sessionId: server.sessionId,
-      reconnectionOptions: server.reconnectionOptions
+      reconnectionOptions: server.reconnectionOptions,
+      authProvider: options.authProvider
     })
   }
 
@@ -188,9 +220,15 @@ export const createTransport = (server: MCPServer): Transport => {
   })
 }
 
-const createSseTransport = (server: StreamableHttpServerConfig): Transport => {
-  const requestInit = server.headers ? { headers: server.headers } : undefined
-  return new SSEClientTransport(new URL(server.url), { requestInit })
+const createSseTransport = (
+  server: StreamableHttpServerConfig,
+  options: TransportFactoryOptions = {}
+): Transport => {
+  const requestInit = options.requestInit ?? buildRequestInit(server.headers)
+  return new SSEClientTransport(new URL(server.url), {
+    requestInit,
+    authProvider: options.authProvider
+  })
 }
 
 const mcpIndexes: IndexDefinition[] = [{ name: 'name', key: { name: 1 } }]
@@ -206,17 +244,21 @@ export class MCPService implements Resource {
   private serverKeys: string[] = []
   private mcpDBClient: MongoDBClient<MCPServerRecord>
   public secretsService: Secrets
+  private oauthTokensService?: McpOAuthTokens
   private packageService?: any // Will be set after initialization to avoid circular dependency
 
   constructor({
     mongoParams,
-    secretsService
+    secretsService,
+    oauthTokensService
   }: {
     mongoParams: MongoConnectionParams
     secretsService: Secrets
+    oauthTokensService?: McpOAuthTokens
   }) {
     this.mcpDBClient = new MongoDBClient<MCPServerRecord>(mongoParams, mcpIndexes)
     this.secretsService = secretsService
+    this.oauthTokensService = oauthTokensService
   }
 
   /**
@@ -288,7 +330,7 @@ export class MCPService implements Resource {
         transportType: 'streamable_http',
         url: server.url,
         headers: server.headers,
-        sessionId: server.sessionId,
+        sessionId: server.sessionId ?? undefined,
         reconnectionOptions: server.reconnectionOptions
       }
 
@@ -347,6 +389,64 @@ export class MCPService implements Resource {
   private async normalizeServerRecord(server: MCPServerRecord): Promise<MCPServer> {
     const withSecrets = await this.migrateServerSecrets(server)
     return this.migrateServerTransport(withSecrets)
+  }
+
+  private async buildTransportOptions(server: MCPServer): Promise<TransportFactoryOptions> {
+    if (server.transportType !== 'streamable_http') {
+      return {}
+    }
+
+    if (!this.oauthTokensService) {
+      return {}
+    }
+
+    const record = await this.oauthTokensService.getTokenRecord(server.name)
+    if (!record) {
+      return {}
+    }
+
+    const authProvider = new McpOAuthClientProvider({
+      serverName: server.name,
+      tokenStore: this.oauthTokensService,
+      record
+    })
+    const sanitizedHeaders = stripAuthorizationHeaders(server.headers)
+    return {
+      authProvider,
+      requestInit: buildRequestInit(sanitizedHeaders ?? {})
+    }
+  }
+
+  private async persistSessionId(
+    serverKey: string,
+    server: MCPServer,
+    transport: StreamableHTTPClientTransport
+  ): Promise<void> {
+    if (server.transportType !== 'streamable_http') {
+      return
+    }
+    const nextSessionId = transport.sessionId
+    if (nextSessionId === server.sessionId) {
+      return
+    }
+    server.sessionId = nextSessionId
+    const current = this.servers[serverKey]
+    if (current && current.transportType === 'streamable_http') {
+      current.sessionId = nextSessionId
+    }
+    await this.mcpDBClient.update({ sessionId: nextSessionId }, { name: server.name })
+  }
+
+  private async clearServerSessionId(serverKey: string, server: MCPServer): Promise<void> {
+    if (server.transportType !== 'streamable_http') {
+      return
+    }
+    server.sessionId = undefined
+    const current = this.servers[serverKey]
+    if (current && current.transportType === 'streamable_http') {
+      current.sessionId = undefined
+    }
+    await this.mcpDBClient.update({ sessionId: undefined }, { name: server.name })
   }
 
   /**
@@ -426,7 +526,7 @@ export class MCPService implements Resource {
     log({ level: 'info', msg: `MCPService initialized with ${this.list.length} servers` })
   }
 
-  private async connectToServer(server: MCPServer) {
+  private async connectToServer(server: MCPServer, allowSessionRetry = true) {
     const serverKey = buildServerKey(server)
     const transportErrorHandler = async (error: Error) => {
       log({ level: 'error', msg: `${serverKey} transport error: ${error.message}`, error })
@@ -469,7 +569,8 @@ export class MCPService implements Resource {
         { name: 'MSQStdioClient', version: '1.0.0' },
         { capabilities: { prompts: {}, resources: {}, tools: {} } }
       )
-      const transport = createTransport(server)
+      const transportOptions = await this.buildTransportOptions(server)
+      const transport = createTransport(server, transportOptions)
       this.servers[serverKey] = {
         ...server,
         status: 'connecting',
@@ -525,8 +626,40 @@ export class MCPService implements Resource {
 
       await this.servers[serverKey].connection!.client.connect(this.servers[serverKey].connection!.transport)
       this.servers[serverKey].status = 'connected'
+      if (server.transportType === 'streamable_http' && transport instanceof StreamableHTTPClientTransport) {
+        await this.persistSessionId(serverKey, server, transport)
+      }
       log({ level: 'info', msg: `[${server.name}] Connected successfully. Will fetch tool list.` })
     } catch (error) {
+      if (
+        server.transportType === 'streamable_http' &&
+        server.sessionId &&
+        allowSessionRetry &&
+        extractHttpStatusFromError(error) === 404
+      ) {
+        log({
+          level: 'warn',
+          msg: `[${server.name}] Streamable HTTP session expired. Clearing sessionId and retrying without it.`
+        })
+        await this.clearServerSessionId(serverKey, server)
+        try {
+          await this.teardownServerConnection(serverKey)
+        } catch (cleanupError) {
+          log({
+            level: 'warn',
+            msg: `[${server.name}] Failed to close transport after session expiration: ${
+              (cleanupError as Error).message
+            }`
+          })
+        }
+        const retryServer: MCPServer = {
+          ...server,
+          sessionId: undefined
+        }
+        await this.connectToServer(retryServer, false)
+        return
+      }
+
       if (server.transportType === 'streamable_http' && shouldFallbackToSse(error)) {
         log({
           level: 'warn',
@@ -552,7 +685,8 @@ export class MCPService implements Resource {
           { name: 'MSQStdioClient', version: '1.0.0' },
           { capabilities: { prompts: {}, resources: {}, tools: {} } }
         )
-        const fallbackTransport = createSseTransport(server)
+        const transportOptions = await this.buildTransportOptions(server)
+        const fallbackTransport = createSseTransport(server, transportOptions)
 
         fallbackTransport.onerror = transportErrorHandler
         fallbackTransport.onclose = transportCloseHandler
@@ -988,6 +1122,40 @@ export class MCPService implements Resource {
     return updatedServer
   }
 
+  public async updateServerOAuthTokens(
+    name: string,
+    input: Omit<McpOAuthTokenInput, 'serverName'>
+  ): Promise<MCPServer> {
+    if (!this.oauthTokensService) {
+      throw new Error('OAuth token storage is not configured')
+    }
+    if (!input.accessToken || !input.clientId || !input.redirectUri) {
+      throw new Error('Missing required OAuth fields: accessToken, clientId, redirectUri')
+    }
+
+    const server = await this.getServer(name)
+    if (!server) {
+      throw new Error(`Server ${name} not found`)
+    }
+    if (server.transportType !== 'streamable_http') {
+      throw new Error(`Server ${name} is not a streamable HTTP server`)
+    }
+
+    const tokenType = input.tokenType || 'Bearer'
+    await this.oauthTokensService.upsertTokenRecord({
+      ...input,
+      tokenType,
+      serverName: name
+    })
+
+    const sanitizedHeaders = server.headers ? stripAuthorizationHeaders(server.headers) ?? {} : undefined
+    const updated = await this.updateServer(name, { headers: sanitizedHeaders })
+    if (!updated) {
+      throw new Error(`Failed to update server ${name} after OAuth token update`)
+    }
+    return updated
+  }
+
   public async deleteServer(name: string): Promise<void> {
     // Prevent deleting built-in servers
     const builtInRegistry = BuiltInServerRegistry.getInstance()
@@ -1141,5 +1309,8 @@ export class MCPService implements Resource {
       }
     }
     await this.mcpDBClient.disconnect()
+    if (this.oauthTokensService) {
+      await this.oauthTokensService.stop()
+    }
   }
 }

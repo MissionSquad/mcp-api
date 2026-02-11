@@ -5,6 +5,8 @@ import { MongoConnectionParams } from '../utils/mongodb'
 import { Resource } from '..'
 import { log } from '../utils/general'
 import { Secrets } from '../services/secrets'
+import type { McpOAuthTokenInput } from '../services/oauthTokens'
+import type { McpOAuthTokens } from '../services/oauthTokens'
 
 export interface ToolCallRequest {
   username?: string
@@ -30,6 +32,8 @@ export type AddServerRequest = AddServerInput
 
 export type UpdateServerRequest = UpdateServerInput
 
+export type UpdateServerOAuthRequest = Omit<McpOAuthTokenInput, 'serverName'>
+
 export class MCPController implements Resource {
   private app: Express
   private mcpService: MCPService
@@ -37,14 +41,16 @@ export class MCPController implements Resource {
   constructor({
     app,
     mongoParams,
-    secretsService
+    secretsService,
+    oauthTokensService
   }: {
     app: Express
     mongoParams: MongoConnectionParams
     secretsService: Secrets
+    oauthTokensService?: McpOAuthTokens
   }) {
     this.app = app
-    this.mcpService = new MCPService({ mongoParams, secretsService })
+    this.mcpService = new MCPService({ mongoParams, secretsService, oauthTokensService })
   }
 
   /**
@@ -65,6 +71,7 @@ export class MCPController implements Resource {
     this.app.get('/mcp/servers/:name', this.getServer.bind(this))
     this.app.post('/mcp/servers', this.addServer.bind(this))
     this.app.put('/mcp/servers/:name', this.updateServer.bind(this))
+    this.app.post('/mcp/servers/:name/oauth', this.updateServerOAuth.bind(this))
     this.app.delete('/mcp/servers/:name', this.deleteServer.bind(this))
     this.app.put('/mcp/servers/:name/enable', this.enableServer.bind(this))
     this.app.put('/mcp/servers/:name/disable', this.disableServer.bind(this))
@@ -211,6 +218,17 @@ export class MCPController implements Resource {
       const name = req.params.name
       const body = req.body as UpdateServerRequest
       const result = await this.mcpService.updateServer(name, body)
+      res.json({ success: true, server: result })
+    } catch (error) {
+      res.status(500).json({ success: false, error: (error as Error).message })
+    }
+  }
+
+  private async updateServerOAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const name = req.params.name
+      const body = req.body as UpdateServerOAuthRequest
+      const result = await this.mcpService.updateServerOAuthTokens(name, body)
       res.json({ success: true, server: result })
     } catch (error) {
       res.status(500).json({ success: false, error: (error as Error).message })

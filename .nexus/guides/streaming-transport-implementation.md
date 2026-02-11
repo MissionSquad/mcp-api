@@ -186,6 +186,16 @@ Required decision:
 - Decide whether to implement explicit 404 handling by wrapping transport errors, clearing the stored session ID, and reconnecting.
 
 If you implement 404 recovery, keep it transport-specific and do not apply it to stdio.
+
+## Session ID Persistence (Required)
+Persist `sessionId` so process restarts can resume existing sessions where supported.
+
+Implementation requirements:
+1. After `client.connect()` succeeds for `streamable_http`, read `transport.sessionId`.
+2. If it differs from `server.sessionId`, update the in-memory server record and persist it to the `mcp` collection (`mcpDBClient.update`).
+3. On subsequent startups, pass the stored `sessionId` into `StreamableHTTPClientTransport` via options so the server can resume the session.
+4. If a request fails with HTTP 404 due to an invalid session, clear the stored `sessionId` in memory and DB and retry connection once without a session ID.
+
 ## Request Flow and Tool Calls (No behavior change required)
 - `MCPService.callTool` and `fetchToolsForServer` use `Client.request` and `Client.callTool`. These work for Streamable HTTP because the transport handles SSE and JSON responses.
 - Keep request timeouts via `RequestOptions`. Consider enabling `resetTimeoutOnProgress` for long-running tools that emit progress notifications.
@@ -203,7 +213,7 @@ Option B: OAuth 2.1 via SDK `OAuthClientProvider` (full spec support)
 - Use `StreamableHTTPClientTransport.finishAuth` after redirect-based auth.
 
 ## OAuth Decision and Flow (Implemented)
-We will integrate OAuth using MissionSquad's existing webhook callback flow and store the resulting access token in the MCP server's HTTP headers. This avoids adding new SDK dependencies to `missionsquad-api` while keeping the OAuth exchange centralized in the webhook controller.
+We will integrate OAuth using MissionSquad's existing webhook callback flow and persist OAuth tokens + client metadata in `mcp-api`, then use `OAuthClientProvider` to automatically refresh access tokens. This keeps authentication stable for scheduled tasks without manual re-auth.
 
 ### Preconditions
 1. The MCP server is already registered in `mcp-api` with `transportType: "streamable_http"` and a valid `url`.
@@ -226,10 +236,52 @@ Create a webhook with `type: "oauth_callback"` and `oauthConfig` fields populate
 1. `missionsquad-api` handles the OAuth callback in `WebhookController.handleOAuthCallback`.
 2. `WebhookService.exchangeOAuthCode` exchanges the authorization code for tokens (already implemented).
 3. `WebhookService.storeOAuthToken` persists the encrypted tokens in MissionSquad (already implemented).
-4. `WebhookService.updateMCPServerAuth` updates the MCP server config in `mcp-api` by fetching the current server (`GET /mcp/servers/:name`), verifying `transportType === "streamable_http"`, merging existing `headers` with `Authorization: "<token_type> <access_token>"`, and sending `PUT /mcp/servers/:name` with the merged `headers` to restart the server connection.
+4. `WebhookService.updateMCPServerAuth` sends OAuth metadata and tokens to `mcp-api` using a dedicated endpoint (see OAuth Refresh Implementation), which stores encrypted tokens and client information for refresh.
 
 ### Token Refresh Strategy
-No automatic refresh is implemented in `mcp-api`. When tokens expire, re-run the OAuth flow and update the MCP server headers via the webhook callback. This is an explicit, manual re-auth requirement until refresh support is added.
+Automatic refresh is required. `mcp-api` will use `OAuthClientProvider` and the stored `refresh_token` to renew access tokens whenever needed. If refresh fails, the server connection should surface an explicit "reauth required" error.
+
+## OAuth Refresh Implementation (Required)
+Implement OAuth refresh in `mcp-api` using `OAuthClientProvider` and a dedicated token store. Do not use `Secrets` for OAuth tokens because `callTool` injects all secrets into tool arguments.
+
+### OAuth Token Store (mcp-api)
+Add a new collection, e.g. `mcpOAuthTokens`, with encrypted fields:
+1. `serverName`: MCP server identifier.
+2. `tokenType`: e.g. `Bearer`.
+3. `accessToken`: encrypted.
+4. `refreshToken`: encrypted (optional but required for refresh).
+5. `expiresAt`: Date (from `expires_in`).
+6. `scopes`: string[] (optional).
+7. `clientId`: OAuth client ID.
+8. `clientSecret`: OAuth client secret (optional).
+9. `redirectUri`: MissionSquad callback URL.
+10. `createdAt`, `updatedAt`.
+
+Encrypt access/refresh tokens and client secret using `SecretEncryptor` with `SECRETS_KEY`.
+
+### OAuthClientProvider (mcp-api)
+Implement `OAuthClientProvider` (see `mcp-api/node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.d.ts`) with:
+1. `redirectUrl`: return stored `redirectUri`.
+2. `clientMetadata`: include `redirect_uris: [redirectUri]`, optional `client_name`.
+3. `clientInformation`: return `{ client_id, client_secret? }` from the token store.
+4. `tokens`: return `{ access_token, refresh_token?, token_type, expires_in? }` from stored values.
+5. `saveTokens`: update encrypted tokens + `expiresAt` in the token store.
+6. `redirectToAuthorization`: throw a descriptive error instructing re-auth via MissionSquad (no UI here).
+7. `saveCodeVerifier`/`codeVerifier`: persist and read PKCE verifier if you choose to support full auth in `mcp-api`, otherwise throw when called (refresh flow does not use it).
+
+### Transport Wiring
+When creating a `StreamableHTTPClientTransport`:
+1. If OAuth tokens exist for the server, pass `authProvider` and omit `Authorization` from static headers (retain other headers).
+2. If no OAuth tokens exist, fall back to static header authentication.
+
+### MissionSquad → mcp-api OAuth Update
+Add an internal endpoint in `mcp-api` to accept OAuth token updates:
+1. `POST /mcp/servers/:name/oauth`
+2. Body: `{ tokenType, accessToken, refreshToken?, expiresIn?, scopes?, clientId, clientSecret?, redirectUri, codeVerifier? }`
+3. `missionsquad-api` calls this endpoint in `updateMCPServerAuth` after token exchange.
+
+### Scheduled Task Reliability
+Because `StreamableHTTPClientTransport` invokes `auth()` when it encounters 401 or needs authorization, refresh tokens will be used automatically, keeping scheduled tasks authenticated without manual intervention.
 
 ## Backwards Compatibility (Optional)
 If you must support deprecated HTTP+SSE servers, use `SSEClientTransport` as a fallback. The SDK includes an example in `mcp-api/node_modules/@modelcontextprotocol/sdk/dist/esm/examples/client/streamableHttpWithSseFallbackClient.js`.
@@ -317,3 +369,5 @@ Run these after implementing the changes.
 10. Run `npm run build` and `npm test`.
 11. Add MissionSquad OAuth callback → MCP server header update flow.
 12. Add SSE fallback when Streamable HTTP initialize POST fails with 400/404/405.
+13. Persist `sessionId` after successful Streamable HTTP connects and clear it on 404 session errors.
+14. Implement OAuth token storage + `OAuthClientProvider` refresh flow and wire MissionSquad callback to the new OAuth update endpoint.
