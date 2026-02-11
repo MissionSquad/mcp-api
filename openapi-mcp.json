@@ -251,6 +251,67 @@
         }
       }
     },
+    "/mcp/servers/{name}/oauth": {
+      "parameters": [
+        {
+          "name": "name",
+          "in": "path",
+          "required": true,
+          "description": "The name of the MCP server.",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": ["MCP Servers"],
+        "summary": "Update server OAuth tokens",
+        "description": "Stores OAuth tokens and client metadata for a streamable HTTP MCP server.",
+        "operationId": "updateServerOAuthTokens",
+        "requestBody": {
+          "description": "OAuth tokens and client metadata.",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateServerOAuthRequest"
+              },
+              "example": {
+                "tokenType": "Bearer",
+                "accessToken": "<access_token>",
+                "refreshToken": "<refresh_token>",
+                "expiresIn": 3600,
+                "scopes": ["read", "write"],
+                "clientId": "<client_id>",
+                "clientSecret": "<client_secret>",
+                "redirectUri": "https://missionsquad.example.com/webhooks/oauth/callback/123"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OAuth tokens stored and server updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Server"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - Invalid input."
+          },
+          "404": {
+            "description": "Not Found - Server with the specified name does not exist."
+          },
+          "500": {
+            "description": "Internal Server Error."
+          }
+        }
+      }
+    },
     "/mcp/servers/{name}/enable": {
       "parameters": [
         {
@@ -463,24 +524,28 @@
       "AddServerRequest": {
         "type": "object",
         "required": [
-          "name",
-          "command"
+          "name"
         ],
         "properties": {
           "name": {
             "type": "string",
             "description": "Unique name for the MCP server."
           },
+          "transportType": {
+            "type": "string",
+            "enum": ["stdio", "streamable_http"],
+            "description": "Transport type for the server. Defaults to stdio if omitted."
+          },
           "command": {
             "type": "string",
-            "description": "The command to execute to start the server process."
+            "description": "The command to execute to start the server process (stdio only)."
           },
           "args": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Arguments to pass to the command.",
+            "description": "Arguments to pass to the command (stdio only).",
             "default": []
           },
           "env": {
@@ -488,41 +553,153 @@
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Environment variables to set for the server process.",
+            "description": "Environment variables to set for the server process (stdio only).",
              "default": {}
+          },
+          "url": {
+            "type": "string",
+            "description": "Streamable HTTP endpoint URL (streamable_http only)."
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "HTTP headers to send with requests (streamable_http only)."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional MCP session ID to resume (streamable_http only)."
+          },
+          "reconnectionOptions": {
+            "type": "object",
+            "description": "Reconnection behavior for SSE streams (streamable_http only).",
+            "properties": {
+              "maxReconnectionDelay": { "type": "number" },
+              "initialReconnectionDelay": { "type": "number" },
+              "reconnectionDelayGrowFactor": { "type": "number" },
+              "maxRetries": { "type": "number" }
+            }
           },
           "enabled": {
             "type": "boolean",
             "description": "Whether the server should be enabled upon creation.",
             "default": true
+          },
+          "startupTimeout": {
+            "type": "number",
+            "description": "Startup or request timeout in milliseconds.",
+            "default": 180000
           }
         }
       },
-       "UpdateServerRequest": {
+      "UpdateServerRequest": {
         "type": "object",
         "description": "Fields to update for an existing server. All fields are optional.",
         "properties": {
+           "transportType": {
+            "type": "string",
+            "enum": ["stdio", "streamable_http"],
+            "description": "Transport type for the server."
+           },
            "command": {
             "type": "string",
-            "description": "The command to execute to start the server process."
+            "description": "The command to execute to start the server process (stdio only)."
           },
           "args": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Arguments to pass to the command."
+            "description": "Arguments to pass to the command (stdio only)."
           },
           "env": {
             "type": "object",
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Environment variables to set for the server process."
+            "description": "Environment variables to set for the server process (stdio only)."
+          },
+          "url": {
+            "type": "string",
+            "description": "Streamable HTTP endpoint URL (streamable_http only)."
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "HTTP headers to send with requests (streamable_http only)."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional MCP session ID to resume (streamable_http only)."
+          },
+          "reconnectionOptions": {
+            "type": "object",
+            "description": "Reconnection behavior for SSE streams (streamable_http only).",
+            "properties": {
+              "maxReconnectionDelay": { "type": "number" },
+              "initialReconnectionDelay": { "type": "number" },
+              "reconnectionDelayGrowFactor": { "type": "number" },
+              "maxRetries": { "type": "number" }
+            }
           },
           "enabled": {
             "type": "boolean",
             "description": "Whether the server is enabled."
+          },
+          "startupTimeout": {
+            "type": "number",
+            "description": "Startup or request timeout in milliseconds."
+          }
+        }
+      },
+      "UpdateServerOAuthRequest": {
+        "type": "object",
+        "required": [
+          "tokenType",
+          "accessToken",
+          "clientId",
+          "redirectUri"
+        ],
+        "properties": {
+          "tokenType": {
+            "type": "string",
+            "description": "OAuth token type (e.g., Bearer)."
+          },
+          "accessToken": {
+            "type": "string",
+            "description": "OAuth access token."
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "OAuth refresh token (optional but required for refresh)."
+          },
+          "expiresIn": {
+            "type": "number",
+            "description": "Access token lifetime in seconds."
+          },
+          "scopes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "OAuth scopes."
+          },
+          "clientId": {
+            "type": "string",
+            "description": "OAuth client ID."
+          },
+          "clientSecret": {
+            "type": "string",
+            "description": "OAuth client secret for confidential clients."
+          },
+          "redirectUri": {
+            "type": "string",
+            "description": "OAuth redirect URI used during authorization."
+          },
+          "codeVerifier": {
+            "type": "string",
+            "description": "PKCE code verifier (optional)."
           }
         }
       },
@@ -536,16 +713,9 @@
              "properties": {
                "status": {
                  "type": "string",
-                 "enum": ["running", "stopped", "error", "starting", "stopping"],
-                 "description": "Current status of the server process.",
+                 "enum": ["connected", "connecting", "disconnected", "error"],
+                 "description": "Current status of the server.",
                  "readOnly": true
-               },
-               "pid": {
-                 "type": "integer",
-                 "format": "int32",
-                 "description": "Process ID if the server is running.",
-                 "readOnly": true,
-                 "nullable": true
                }
              }
            }
