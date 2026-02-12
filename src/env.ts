@@ -17,5 +17,9 @@ export const env = {
     const [repo, name] = pkg.split('|')
     return { repo, name }
   }),
-  SEARXNG_URL: process.env.SEARXNG_URL
+  SEARXNG_URL: process.env.SEARXNG_URL,
+  PYTHON_BIN: process.env.PYTHON_BIN,
+  PYTHON_VENV_DIR: process.env.PYTHON_VENV_DIR || 'packages/python',
+  PIP_INDEX_URL: process.env.PIP_INDEX_URL,
+  PIP_EXTRA_INDEX_URL: process.env.PIP_EXTRA_INDEX_URL
 }

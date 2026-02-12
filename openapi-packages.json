@@ -41,6 +41,17 @@
                     "version": "1.0.0",
                     "enabled": true
                   }
+                },
+                "installPythonMcp": {
+                  "summary": "Python MCP install request",
+                  "value": {
+                    "name": "my-python-mcp",
+                    "serverName": "python-mcp",
+                    "runtime": "python",
+                    "pythonModule": "my_mcp_server",
+                    "pythonArgs": ["--port", "0"],
+                    "enabled": true
+                  }
                 }
               }
             }
@@ -557,6 +568,32 @@
             "type": "string",
             "description": "Path where the package is installed"
           },
+          "runtime": {
+            "type": "string",
+            "enum": ["node", "python"],
+            "description": "Package runtime."
+          },
+          "pythonModule": {
+            "type": "string",
+            "description": "Python module executed with -m."
+          },
+          "pythonArgs": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Arguments passed to the Python module."
+          },
+          "venvPath": {
+            "type": "string",
+            "description": "Relative path to the Python virtual environment."
+          },
+          "pipIndexUrl": {
+            "type": "string",
+            "description": "pip index URL used for installs/upgrades."
+          },
+          "pipExtraIndexUrl": {
+            "type": "string",
+            "description": "pip extra index URL used for installs/upgrades."
+          },
           "status": {
             "type": "string",
             "description": "Installation status",
@@ -661,6 +698,11 @@
             "type": "string",
             "description": "Name to assign to the server"
           },
+          "runtime": {
+            "type": "string",
+            "enum": ["node", "python"],
+            "description": "Package runtime. Defaults to node if omitted."
+          },
           "transportType": {
             "type": "string",
             "enum": ["stdio", "streamable_http"],
@@ -680,6 +722,23 @@
               "type": "string"
             },
             "description": "Array of arguments for the command (stdio only, optional)"
+          },
+          "pythonModule": {
+            "type": "string",
+            "description": "Python module to execute with -m (required for python runtime)."
+          },
+          "pythonArgs": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Arguments appended after -m <pythonModule>."
+          },
+          "pipIndexUrl": {
+            "type": "string",
+            "description": "Optional pip index URL for this install."
+          },
+          "pipExtraIndexUrl": {
+            "type": "string",
+            "description": "Optional extra pip index URL for this install."
           },
           "env": {
             "type": "object",
