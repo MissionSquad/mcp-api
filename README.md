@@ -77,6 +77,10 @@ The system uses AES-256-GCM encryption for all stored secrets, with a separate e
    MONGO_DBNAME=mcp
    SECRETS_KEY=your-random-key
    SECRETS_DBNAME=secrets
+   PYTHON_BIN=/usr/bin/python3
+   PYTHON_VENV_DIR=packages/python
+   PIP_INDEX_URL=
+   PIP_EXTRA_INDEX_URL=
    ```
 
 5. Build the project:
@@ -99,6 +103,7 @@ The system uses AES-256-GCM encryption for all stored secrets, with a separate e
    ```bash
    docker-compose up -d
    ```
+3. The container image includes Python 3.13 and sets `PYTHON_BIN=/usr/local/bin/python3.13` by default for Python MCP package installs.
 
 ### Building the Docker Image
 
@@ -106,6 +111,8 @@ The system uses AES-256-GCM encryption for all stored secrets, with a separate e
 docker build -t mcp-api .
 docker run -p 8080:8080 --env-file .env mcp-api
 ```
+
+For Python MCP servers that require Python 3.13+ (for example `klaviyo-mcp-server`), do not override `PYTHON_BIN` to an older interpreter in container deployments.
 
 ## API Reference
 
@@ -150,7 +157,25 @@ Streamable HTTP install example:
 }
 ```
 
+Python stdio install example:
+
+```json
+{
+  "name": "my-python-mcp",
+  "serverName": "python-mcp",
+  "runtime": "python",
+  "pythonModule": "my_mcp_server",
+  "pythonArgs": ["--port", "0"],
+  "enabled": true
+}
+```
+
 If `transportType` is omitted, the API defaults to `stdio`. For `streamable_http`, `command`, `args`, and `env` are ignored.
+For `runtime: "python"`, `pythonModule` is required and `transportType` must be `stdio`.
+Python installs always use a virtual environment at `packages/python/<serverName>` (or `PYTHON_VENV_DIR` if configured).
+Python upgrades run `pip install --upgrade` inside that same virtual environment.
+For Python runtime, `installPath` and `venvPath` are the same directory.
+If `pipIndexUrl` or `pipExtraIndexUrl` are provided during install, they are persisted and reused for upgrades and update checks.
 
 #### List Installed Packages
 

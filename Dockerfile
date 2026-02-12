@@ -1,3 +1,6 @@
+# Stage with CPython 3.13 runtime artifacts
+FROM python:3.13-slim-bookworm AS python313
+
 # Use an official Node.js runtime as the base image
 FROM node:20
 
@@ -41,10 +44,28 @@ RUN apt-get update \
   libxrender1 \
   libxss1 \
   libxtst6 \
+  libbz2-1.0 \
+  libffi8 \
+  liblzma5 \
+  libreadline8 \
+  libsqlite3-0 \
+  libssl3 \
+  zlib1g \
   lsb-release \
   wget \
   xdg-utils \
   && rm -rf /var/lib/apt/lists/*
+
+# Copy Python 3.13 runtime from python image
+COPY --from=python313 /usr/local/bin/python3.13 /usr/local/bin/python3.13
+COPY --from=python313 /usr/local/lib/python3.13 /usr/local/lib/python3.13
+COPY --from=python313 /usr/local/lib/libpython3.13.so* /usr/local/lib/
+RUN ln -sf /usr/local/bin/python3.13 /usr/local/bin/python3 \
+  && ln -sf /usr/local/bin/python3.13 /usr/local/bin/python \
+  && python3.13 -V
+
+# Default Python used by PackageService for python runtime MCP servers
+ENV PYTHON_BIN=/usr/local/bin/python3.13
 
 # Set Puppeteer to use installed Chromium
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium

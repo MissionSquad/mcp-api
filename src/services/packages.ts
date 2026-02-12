@@ -1,13 +1,17 @@
 import { MCPService, MCPServer, MCPTransportType, assertTransportConfigCompatible } from './mcp'
 import { IndexDefinition, MongoConnectionParams, MongoDBClient } from '../utils/mongodb'
 import { log, compareVersions } from '../utils/general'
+import { env } from '../env'
 import * as path from 'path'
 import { existsSync, mkdir, readFile, rm } from 'fs-extra'
 import { promisify } from 'util'
-import { exec as execCallback } from 'child_process'
+import { exec as execCallback, execFile as execFileCallback } from 'child_process'
 import type { StreamableHTTPReconnectionOptions } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
 const exec = promisify(execCallback)
+const execFile = promisify(execFileCallback)
+
+export type PackageRuntime = 'node' | 'python'
 
 export interface PackageInfo {
   name: string
@@ -23,6 +27,12 @@ export interface PackageInfo {
   error?: string
   mcpServerId?: string
   enabled?: boolean
+  runtime?: PackageRuntime
+  pythonModule?: string
+  pythonArgs?: string[]
+  venvPath?: string
+  pipIndexUrl?: string
+  pipExtraIndexUrl?: string
 }
 
 export interface InstallPackageRequest {
@@ -40,6 +50,11 @@ export interface InstallPackageRequest {
   secretName?: string
   enabled?: boolean
   failOnWarning?: boolean
+  runtime?: PackageRuntime
+  pythonModule?: string
+  pythonArgs?: string[]
+  pipIndexUrl?: string
+  pipExtraIndexUrl?: string
 }
 
 const packageIndexes: IndexDefinition[] = [{ name: 'name', key: { name: 1 } }]
@@ -63,6 +78,124 @@ export class PackageService {
     this.mcpService = mcpService
   }
 
+  private sanitizeServerName(serverName: string): string {
+    return serverName.replace(/[^a-zA-Z0-9_-]/g, '-')
+  }
+
+  private async resolvePythonExecutable(): Promise<string> {
+    const candidates = [env.PYTHON_BIN, 'python3', 'python'].filter(Boolean) as string[]
+    for (const candidate of candidates) {
+      try {
+        await execFile(candidate, ['-V'])
+        return candidate
+      } catch {
+        // Try next candidate
+      }
+    }
+    throw new Error('Python executable not found. Set PYTHON_BIN or install python3.')
+  }
+
+  private resolveVenvPaths(serverName: string): { absolute: string; relative: string } {
+    const sanitized = this.sanitizeServerName(serverName)
+    const relative = path.join(env.PYTHON_VENV_DIR || 'packages/python', sanitized)
+    const absolute = path.resolve(process.cwd(), relative)
+    return { absolute, relative }
+  }
+
+  private venvBinDir(): string {
+    return process.platform === 'win32' ? 'Scripts' : 'bin'
+  }
+
+  private venvPythonPath(venvAbsolutePath: string): string {
+    const binDir = this.venvBinDir()
+    const exeName = process.platform === 'win32' ? 'python.exe' : 'python'
+    return path.join(venvAbsolutePath, binDir, exeName)
+  }
+
+  private venvPipPath(venvAbsolutePath: string): string {
+    const binDir = this.venvBinDir()
+    const exeName = process.platform === 'win32' ? 'pip.exe' : 'pip'
+    return path.join(venvAbsolutePath, binDir, exeName)
+  }
+
+  private async ensureVenv(pythonExecutable: string, venvAbsolutePath: string): Promise<void> {
+    const pythonPath = this.venvPythonPath(venvAbsolutePath)
+    if (existsSync(pythonPath)) {
+      return
+    }
+    await mkdir(venvAbsolutePath, { recursive: true })
+    await execFile(pythonExecutable, ['-m', 'venv', venvAbsolutePath])
+  }
+
+  private async pipInstall(
+    venvAbsolutePath: string,
+    spec: string,
+    options: { indexUrl?: string; extraIndexUrl?: string },
+    extraArgs: string[] = []
+  ): Promise<void> {
+    const pipPath = this.venvPipPath(venvAbsolutePath)
+    const args = ['install', ...extraArgs, spec]
+    if (options.indexUrl) {
+      args.push('--index-url', options.indexUrl)
+    }
+    if (options.extraIndexUrl) {
+      args.push('--extra-index-url', options.extraIndexUrl)
+    }
+    await execFile(pipPath, args)
+  }
+
+  private async pipShowVersion(venvAbsolutePath: string, name: string): Promise<string> {
+    const pipPath = this.venvPipPath(venvAbsolutePath)
+    const { stdout } = await execFile(pipPath, ['show', name])
+    const versionLine = stdout.split('\n').find(line => line.startsWith('Version:'))
+    if (!versionLine) {
+      throw new Error(`Unable to determine installed version for ${name}`)
+    }
+    return versionLine.replace('Version:', '').trim()
+  }
+
+  private async pipIndexLatestVersion(
+    venvAbsolutePath: string,
+    name: string,
+    options: { indexUrl?: string; extraIndexUrl?: string }
+  ): Promise<string | undefined> {
+    try {
+      const pipPath = this.venvPipPath(venvAbsolutePath)
+      const args = ['index', 'versions', name]
+      if (options.indexUrl) {
+        args.push('--index-url', options.indexUrl)
+      }
+      if (options.extraIndexUrl) {
+        args.push('--extra-index-url', options.extraIndexUrl)
+      }
+      const { stdout } = await execFile(pipPath, args)
+      const line = stdout.split('\n').find(entry => entry.startsWith('Available versions:'))
+      if (!line) {
+        return undefined
+      }
+      const versions = line.replace('Available versions:', '').split(',').map(v => v.trim())
+      return versions[0]
+    } catch {
+      // Older pip may not support `index versions`
+      return undefined
+    }
+  }
+
+  private buildPythonArgs(pythonModule: string, pythonArgs?: string[]): string[] {
+    return ['-u', '-m', pythonModule, ...(pythonArgs ?? [])]
+  }
+
+  private buildPythonEnv(venvAbsolutePath: string, customEnv?: Record<string, string>): Record<string, string> {
+    const venvBin = path.join(venvAbsolutePath, this.venvBinDir())
+    const existingPath = customEnv?.PATH ?? process.env.PATH ?? ''
+    return {
+      ...customEnv,
+      PYTHONUNBUFFERED: '1',
+      VIRTUAL_ENV: venvAbsolutePath,
+      PATH: `${venvBin}${path.delimiter}${existingPath}`
+    }
+  }
+
   /**
    * Attempt to install a package for a server that failed to start
    * @param serverName The name of the server that failed to start
@@ -70,6 +203,12 @@ export class PackageService {
    */
   async installMissingPackage(serverName: string): Promise<boolean> {
     try {
+      const existingPackage = await this.getPackageById(serverName)
+      if (existingPackage?.runtime === 'python') {
+        log({ level: 'warn', msg: `Server ${serverName} is Python; automatic reinstall is not supported.` })
+        return false
+      }
+
       // Get the server details
       const server = await this.mcpService.getServer(serverName)
       if (!server) {
@@ -154,7 +293,7 @@ export class PackageService {
       transportType,
       command,
       args,
-      env,
+      env: envVars,
       url,
       headers,
       sessionId,
@@ -164,12 +303,87 @@ export class PackageService {
       failOnWarning = false
     } = request
     const resolvedTransportType: MCPTransportType = transportType ?? 'stdio'
+    const runtime: PackageRuntime = request.runtime ?? 'node'
+
+    if (runtime === 'python') {
+      if (!request.pythonModule) {
+        return { success: false, error: 'pythonModule is required for python runtime.' }
+      }
+      if (!/^[a-zA-Z0-9_.]+$/.test(request.pythonModule)) {
+        return { success: false, error: `Invalid pythonModule: ${request.pythonModule}` }
+      }
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)) {
+        return { success: false, error: `Invalid Python package name: ${name}` }
+      }
+      if (resolvedTransportType !== 'stdio') {
+        return { success: false, error: 'Python runtime only supports stdio transport.' }
+      }
+      if (url || headers || sessionId || reconnectionOptions) {
+        return { success: false, error: 'Streamable HTTP fields are not allowed for python runtime.' }
+      }
+
+      const { absolute: venvAbsolutePath, relative: venvRelativePath } = this.resolveVenvPaths(serverName)
+      const pythonPackageInfo: PackageInfo = {
+        name,
+        version: version || 'latest',
+        installPath: venvRelativePath,
+        venvPath: venvRelativePath,
+        status: 'installing',
+        installed: new Date(),
+        mcpServerId: serverName,
+        enabled,
+        runtime: 'python',
+        pythonModule: request.pythonModule,
+        pythonArgs: request.pythonArgs,
+        pipIndexUrl: request.pipIndexUrl ?? env.PIP_INDEX_URL,
+        pipExtraIndexUrl: request.pipExtraIndexUrl ?? env.PIP_EXTRA_INDEX_URL
+      }
+
+      await this.packagesDBClient.upsert(pythonPackageInfo, { name })
+
+      try {
+        const pythonExecutable = await this.resolvePythonExecutable()
+        await this.ensureVenv(pythonExecutable, venvAbsolutePath)
+
+        const spec = version ? `${name}==${version}` : name
+        await this.pipInstall(venvAbsolutePath, spec, {
+          indexUrl: pythonPackageInfo.pipIndexUrl,
+          extraIndexUrl: pythonPackageInfo.pipExtraIndexUrl
+        })
+
+        const installedVersion = await this.pipShowVersion(venvAbsolutePath, name)
+        const pythonCommand = this.venvPythonPath(venvAbsolutePath)
+        const pythonArgs = this.buildPythonArgs(request.pythonModule, request.pythonArgs)
+        const pythonEnv = this.buildPythonEnv(venvAbsolutePath, envVars)
+
+        const server = await this.mcpService.addServer({
+          name: serverName,
+          transportType: 'stdio',
+          command: pythonCommand,
+          args: pythonArgs,
+          env: pythonEnv,
+          secretName,
+          enabled
+        })
+
+        pythonPackageInfo.version = installedVersion
+        pythonPackageInfo.status = 'installed'
+        await this.packagesDBClient.update(pythonPackageInfo, { name })
+
+        return { success: true, package: pythonPackageInfo, server }
+      } catch (error) {
+        pythonPackageInfo.status = 'error'
+        pythonPackageInfo.error = (error as Error).message
+        await this.packagesDBClient.update(pythonPackageInfo, { name })
+        return { success: false, error: (error as Error).message }
+      }
+    }
 
     assertTransportConfigCompatible({
       transportType: resolvedTransportType,
       command,
       args,
-      env,
+      env: envVars,
       url,
       headers,
       sessionId,
@@ -274,7 +488,7 @@ export class PackageService {
         })
       } else {
         const stdioArgs = [...(args ?? [])]
-        const stdioEnv = env ?? {}
+        const stdioEnv = envVars ?? {}
 
         // Determine run command if not provided
         let finalCommand = command
@@ -338,6 +552,7 @@ export class PackageService {
       }
 
       // Update package info with success
+      packageInfo.runtime = 'node'
       packageInfo.status = 'installed'
       packageInfo.mcpServerId = serverName
       packageInfo.enabled = enabled
@@ -435,9 +650,9 @@ export class PackageService {
         }
       }
 
-      // Delete package directory - convert relative path to absolute path
-      if (packageInfo.installPath) {
-        const absoluteInstallPath = path.resolve(process.cwd(), packageInfo.installPath)
+      const installPath = packageInfo.venvPath ?? packageInfo.installPath
+      if (installPath) {
+        const absoluteInstallPath = path.resolve(process.cwd(), installPath)
         if (existsSync(absoluteInstallPath)) {
           await rm(absoluteInstallPath, { recursive: true, force: true })
         }
@@ -484,6 +699,28 @@ export class PackageService {
         try {
           // Skip packages without mcpServerId
           if (!pkg.mcpServerId) continue
+
+          if (pkg.runtime === 'python') {
+            const venvAbsolutePath = pkg.venvPath
+              ? path.resolve(process.cwd(), pkg.venvPath)
+              : path.resolve(process.cwd(), pkg.installPath)
+            const latest = await this.pipIndexLatestVersion(venvAbsolutePath, pkg.name, {
+              indexUrl: pkg.pipIndexUrl ?? env.PIP_INDEX_URL,
+              extraIndexUrl: pkg.pipExtraIndexUrl ?? env.PIP_EXTRA_INDEX_URL
+            })
+            const latestVersion = latest ?? 'unknown'
+            const updateAvailable = latest ? latest !== pkg.version : false
+            pkg.latestVersion = latestVersion
+            pkg.updateAvailable = updateAvailable
+            await this.packagesDBClient.update(pkg, { mcpServerId: pkg.mcpServerId })
+            updates.push({
+              serverName: pkg.mcpServerId,
+              currentVersion: pkg.version,
+              latestVersion,
+              updateAvailable
+            })
+            continue
+          }
 
           // Get the latest version from npm registry
           const npmInfoCmd = `npm view ${pkg.name} version`
@@ -563,6 +800,42 @@ export class PackageService {
       }
 
       try {
+        const runtime: PackageRuntime = packageInfo.runtime ?? 'node'
+        if (runtime === 'python') {
+          const venvAbsolutePath = packageInfo.venvPath
+            ? path.resolve(process.cwd(), packageInfo.venvPath)
+            : path.resolve(process.cwd(), packageInfo.installPath)
+
+          const spec = version ? `${packageInfo.name}==${version}` : packageInfo.name
+          await this.pipInstall(
+            venvAbsolutePath,
+            spec,
+            {
+              indexUrl: packageInfo.pipIndexUrl ?? env.PIP_INDEX_URL,
+              extraIndexUrl: packageInfo.pipExtraIndexUrl ?? env.PIP_EXTRA_INDEX_URL
+            },
+            ['--upgrade']
+          )
+
+          const newVersion = await this.pipShowVersion(venvAbsolutePath, packageInfo.name)
+          packageInfo.version = newVersion
+          packageInfo.status = 'installed'
+          packageInfo.lastUpgraded = new Date()
+          packageInfo.updateAvailable = false
+
+          let updatedServer: MCPServer = server
+          if (wasEnabled) {
+            const enabledServer = await this.mcpService.enableServer(serverName)
+            if (!enabledServer) {
+              throw new Error(`Failed to re-enable server ${serverName} after upgrade`)
+            }
+            updatedServer = enabledServer
+          }
+
+          await this.packagesDBClient.update(packageInfo, { mcpServerId: serverName })
+          return { success: true, package: packageInfo, server: updatedServer }
+        }
+
         // Get the absolute path to the package directory
         const packageDir = path.resolve(process.cwd(), packageInfo.installPath)
 
