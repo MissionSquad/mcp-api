@@ -20,6 +20,9 @@ Instead of embedding sensitive credentials in environment variables, MCP API sto
 - **User-specific Secret Storage**: Each user's secrets are isolated and encrypted separately
 - **Package Management**: Simplified installation and configuration of MCP server packages
 - **HTTP API**: Simple REST API for accessing MCP tools and managing secrets
+- **Streamable HTTP Transport**: First-class support for `streamable_http` MCP servers with optional SSE fallback
+- **Session Persistence**: HTTP session IDs are persisted and resumed across process restarts
+- **OAuth Token Refresh**: Streamable HTTP servers can refresh OAuth tokens automatically via stored refresh tokens
 - **Containerized Deployment**: Docker and Docker Compose support for easy deployment
 
 ## Architecture
@@ -29,8 +32,9 @@ MCP API acts as a proxy between clients and MCP servers:
 1. **Client Requests**: Applications send requests to the HTTP API
 2. **Secret Management**: The API retrieves and decrypts user-specific secrets as needed
 3. **Package Management**: The API handles installation, configuration, and lifecycle of MCP server packages
-4. **MCP Server Communication**: The API communicates with MCP servers using the Model Context Protocol
-5. **Response Handling**: Results from MCP servers are returned to clients
+4. **Transport Selection**: Each server uses either stdio or Streamable HTTP transport based on configuration
+5. **MCP Server Communication**: The API communicates with MCP servers using the Model Context Protocol
+6. **Response Handling**: Results from MCP servers are returned to clients
 
 The system uses AES-256-GCM encryption for all stored secrets, with a separate encryption key for each deployment.
 
@@ -60,7 +64,7 @@ The system uses AES-256-GCM encryption for all stored secrets, with a separate e
 3. Create a `.env` file based on the example:
 
    ```bash
-   cp env.example .env
+   cp example.env .env
    ```
 
 4. Configure your environment variables:
@@ -72,7 +76,7 @@ The system uses AES-256-GCM encryption for all stored secrets, with a separate e
    MONGO_HOST=localhost:27017
    MONGO_DBNAME=mcp
    SECRETS_KEY=your-random-key
-   SECRETS_COLLECTION=secrets
+   SECRETS_DBNAME=secrets
    ```
 
 5. Build the project:
@@ -120,6 +124,7 @@ Request body:
   "name": "package-name",
   "version": "1.0.0", // Optional, defaults to "latest"
   "serverName": "unique-server-name",
+  "transportType": "stdio",
   "command": "node", // Optional, auto-detected if not provided
   "args": ["--option1", "--option2"], // Optional
   "env": {
@@ -128,6 +133,24 @@ Request body:
   }
 }
 ```
+
+Streamable HTTP install example:
+
+```json
+{
+  "name": "package-name",
+  "version": "1.0.0",
+  "serverName": "remote-http-server",
+  "transportType": "streamable_http",
+  "url": "https://example.com/mcp",
+  "headers": {
+    "X-Custom-Header": "value"
+  },
+  "enabled": true
+}
+```
+
+If `transportType` is omitted, the API defaults to `stdio`. For `streamable_http`, `command`, `args`, and `env` are ignored.
 
 #### List Installed Packages
 
@@ -234,6 +257,8 @@ Response:
   }
 }
 ```
+
+Upgrades work for both `stdio` and `streamable_http` servers. Streamable HTTP upgrades preserve `url`, `headers`, `sessionId`, and `reconnectionOptions` and do not attempt stdio command resolution.
 
 #### Upgrade All Packages
 
@@ -443,6 +468,7 @@ Response format:
   "servers": [
     {
       "name": "mcp-github",
+      "transportType": "stdio",
       "command": "./node_modules/@missionsquad/mcp-github/build/index.js",
       "args": ["--port", "3000"],
       "env": {
@@ -492,7 +518,7 @@ Response format:
           }
         }
       ],
-      "errors": []
+      "logs": []
     }
   ]
 }
@@ -506,10 +532,14 @@ The response structure contains:
   - `command`: The command used to start the server
   - `args`: Command-line arguments passed to the server
   - `env`: Environment variables set for the server (excluding secrets)
+  - `url`: Streamable HTTP endpoint (streamable_http only)
+  - `headers`: Optional HTTP headers (streamable_http only)
+  - `sessionId`: Optional persisted MCP session ID (streamable_http only)
+  - `reconnectionOptions`: SSE reconnection settings (streamable_http only)
   - `status`: Current connection status ("connected", "connecting", "disconnected", or "error")
   - `enabled`: Whether the server is enabled
   - `toolsList`: Array of tools provided by this server (same format as in `/mcp/tools` response)
-  - `errors`: Array of error messages if the server encountered any issues
+  - `logs`: Array of captured log messages if the server encountered any issues
 
 This endpoint is useful for monitoring the status of all MCP servers and understanding their configurations.
 
@@ -534,6 +564,7 @@ Response format:
   "success": true,
   "server": {
     "name": "mcp-github",
+    "transportType": "stdio",
     "command": "./node_modules/@missionsquad/mcp-github/build/index.js",
     "args": ["--port", "3000"],
     "env": {
@@ -583,7 +614,7 @@ Response format:
         }
       }
     ],
-    "errors": []
+    "logs": []
   }
 }
 ```
@@ -610,6 +641,7 @@ Request body:
 ```json
 {
   "name": "helper-tools",
+  "transportType": "stdio",
   "command": "./node_modules/@missionsquad/mcp-helper-tools/build/index.js",
   "args": ["--option1", "--option2"], // Optional
   "env": {
@@ -620,12 +652,31 @@ Request body:
 }
 ```
 
+Streamable HTTP example:
+
+```json
+{
+  "name": "remote-http-server",
+  "transportType": "streamable_http",
+  "url": "https://example.com/mcp",
+  "headers": {
+    "X-Custom-Header": "value"
+  },
+  "enabled": true
+}
+```
+
 Parameters:
 
 - `name`: (Required) A unique name for the MCP server
-- `command`: (Required) The command to execute to start the MCP server
-- `args`: (Optional) An array of command-line arguments to pass to the server
-- `env`: (Optional) An object containing environment variables to set for the server
+- `command`: (Required for stdio) The command to execute to start the MCP server
+- `args`: (Optional for stdio) An array of command-line arguments to pass to the server
+- `env`: (Optional for stdio) An object containing environment variables to set for the server
+- `transportType`: (Optional) `stdio` or `streamable_http` (defaults to `stdio`)
+- `url`: (Required for streamable_http) The MCP HTTP endpoint
+- `headers`: (Optional for streamable_http) Static headers to send with requests
+- `sessionId`: (Optional for streamable_http) Persisted session ID to resume
+- `reconnectionOptions`: (Optional for streamable_http) SSE reconnection settings
 - `enabled`: (Optional) Whether the server should be enabled immediately (defaults to true)
 
 Response format:
@@ -635,6 +686,7 @@ Response format:
   "success": true,
   "server": {
     "name": "helper-tools",
+    "transportType": "stdio",
     "command": "./node_modules/@missionsquad/mcp-helper-tools/build/index.js",
     "args": ["--option1", "--option2"],
     "env": {
@@ -656,6 +708,8 @@ Error response (server already exists):
 ```
 
 > **Important Security Note**: Do not include sensitive information like passwords or API keys in the `env` object. Use the secret management endpoints to securely store and manage sensitive credentials.
+
+For streamable HTTP OAuth, do not store bearer tokens in `headers`. Use the OAuth update endpoint (`POST /mcp/servers/:name/oauth`) so tokens are encrypted and refreshed automatically.
 
 #### Update an Existing MCP Server
 
@@ -680,6 +734,24 @@ Request body:
     "NODE_ENV": "development"
   },
   "enabled": false // Optional
+}
+```
+
+Streamable HTTP update example:
+
+```json
+{
+  "transportType": "streamable_http",
+  "url": "https://example.com/mcp",
+  "headers": {
+    "X-Custom-Header": "value"
+  },
+  "reconnectionOptions": {
+    "maxReconnectionDelay": 30000,
+    "initialReconnectionDelay": 1000,
+    "reconnectionDelayGrowFactor": 1.5,
+    "maxRetries": 2
+  }
 }
 ```
 
@@ -717,6 +789,30 @@ When a server configuration is updated, the system will:
 1. Stop the server if it's running
 2. Update the configuration in the database
 3. Restart the server with the new configuration (unless `enabled` is set to `false`)
+
+#### Update Streamable HTTP OAuth Tokens
+
+```
+POST /mcp/servers/:name/oauth
+```
+
+Stores OAuth tokens and client metadata for a Streamable HTTP server. Tokens are encrypted and used by the SDK for automatic refresh.
+
+Request body:
+
+```json
+{
+  "tokenType": "Bearer",
+  "accessToken": "<access_token>",
+  "refreshToken": "<refresh_token>",
+  "expiresIn": 3600,
+  "scopes": ["read", "write"],
+  "clientId": "<client_id>",
+  "clientSecret": "<client_secret>",
+  "redirectUri": "https://missionsquad.example.com/webhooks/oauth/callback/123",
+  "codeVerifier": "<pkce_verifier>"
+}
+```
 
 #### Delete an MCP Server
 
@@ -956,7 +1052,31 @@ The MCP API implements a robust security model for handling secrets:
 
 This approach allows for secure multi-user access to shared MCP server instances while maintaining strong isolation between users' credentials.
 
+### Streamable HTTP Transport Behavior
+
+- Streamable HTTP servers use `transportType: "streamable_http"` with `url`, optional `headers`, and optional `reconnectionOptions`.
+- `sessionId` is persisted after a successful connection and reused on restart.
+- If a request fails with HTTP 404 while a `sessionId` is present, the session ID is cleared and the client retries once without it.
+- If Streamable HTTP initialization fails with HTTP 400, 404, or 405, the client automatically falls back to the legacy SSE transport.
+- If OAuth tokens are stored for a server, the SDK supplies `Authorization` headers and any static `Authorization` header in `headers` is ignored.
+
 ### OAuth2 Authentication Flow
+
+#### Streamable HTTP OAuth (MissionSquad Callback)
+
+This flow applies to `streamable_http` servers that require OAuth 2.1. Tokens are stored in `mcp-api`, refreshed automatically, and never passed through tool arguments.
+
+1. Register the MCP server in `mcp-api` with `transportType: "streamable_http"` and a valid `url`.
+2. In MissionSquad, create an `oauth_callback` webhook with `oauthConfig` populated:
+   - `provider`, `state`, `codeVerifier`, `redirectUri`, `scopes`, `mcpServerName`, `authorizationServer`, `tokenEndpoint`, `clientId`, optional `clientSecret`.
+3. Start the OAuth authorization in your client and direct the user to the authorization URL with `redirect_uri` set to the MissionSquad webhook callback.
+4. MissionSquad exchanges the authorization code for tokens and calls:
+   - `POST /mcp/servers/:name/oauth`
+5. `mcp-api` stores the encrypted tokens and uses the SDK `OAuthClientProvider` for automatic refresh on 401 or expiry.
+
+If refresh fails or tokens are missing, the transport throws a re-auth required error and the MissionSquad flow must be re-run.
+
+#### Stdio OAuth2 (MCP_AUTH_TYPE Example)
 
 For MCP servers that require user-specific OAuth2 authentication (like Google), the API provides a generic, secure, and scalable workflow. This allows users to grant consent once and enables the platform to perform actions on their behalf indefinitely, without the user or the front-end ever handling sensitive tokens.
 

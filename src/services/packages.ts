@@ -1,10 +1,11 @@
-import { MCPService, MCPServer } from './mcp'
+import { MCPService, MCPServer, MCPTransportType, assertTransportConfigCompatible } from './mcp'
 import { IndexDefinition, MongoConnectionParams, MongoDBClient } from '../utils/mongodb'
 import { log, compareVersions } from '../utils/general'
 import * as path from 'path'
 import { existsSync, mkdir, readFile, rm } from 'fs-extra'
 import { promisify } from 'util'
 import { exec as execCallback } from 'child_process'
+import type { StreamableHTTPReconnectionOptions } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
 const exec = promisify(execCallback)
 
@@ -28,9 +29,14 @@ export interface InstallPackageRequest {
   name: string
   version?: string
   serverName: string
+  transportType?: MCPTransportType
   command?: string
   args?: string[]
   env?: Record<string, string>
+  url?: string
+  headers?: Record<string, string>
+  sessionId?: string
+  reconnectionOptions?: StreamableHTTPReconnectionOptions
   secretName?: string
   enabled?: boolean
   failOnWarning?: boolean
@@ -68,6 +74,10 @@ export class PackageService {
       const server = await this.mcpService.getServer(serverName)
       if (!server) {
         log({ level: 'error', msg: `Server ${serverName} not found` })
+        return false
+      }
+      if (server.transportType !== 'stdio') {
+        log({ level: 'warn', msg: `Server ${serverName} is not stdio; skipping package installation.` })
         return false
       }
 
@@ -137,7 +147,34 @@ export class PackageService {
     server?: MCPServer
     error?: string
   }> {
-    const { name, version, serverName, command, args = [], env = {}, secretName, enabled = true, failOnWarning = false } = request
+    const {
+      name,
+      version,
+      serverName,
+      transportType,
+      command,
+      args,
+      env,
+      url,
+      headers,
+      sessionId,
+      reconnectionOptions,
+      secretName,
+      enabled = true,
+      failOnWarning = false
+    } = request
+    const resolvedTransportType: MCPTransportType = transportType ?? 'stdio'
+
+    assertTransportConfigCompatible({
+      transportType: resolvedTransportType,
+      command,
+      args,
+      env,
+      url,
+      headers,
+      sessionId,
+      reconnectionOptions
+    })
 
     // Validate package name to prevent command injection
     if (!/^[@a-z0-9-_\/\.]+$/.test(name)) {
@@ -145,6 +182,13 @@ export class PackageService {
         success: false,
         error: `Invalid package name: ${name}. Package names must match npm naming conventions.`
       }
+    }
+
+    if (resolvedTransportType === 'streamable_http') {
+      if (!url) {
+        return { success: false, error: 'Streamable HTTP servers require a url.' }
+      }
+      new URL(url)
     }
 
     // Check if a server with this name already exists in MCPService
@@ -214,60 +258,84 @@ export class PackageService {
       const packageJsonPath = path.join(packageDir, 'package.json')
       const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8'))
 
-      // Determine run command if not provided
-      let finalCommand = command
-      if (!finalCommand) {
-        // Get the relative package directory path (from project root)
-        const relativePackageDir = path.relative(process.cwd(), packageDir)
+      let server: MCPServer
+      if (resolvedTransportType === 'streamable_http') {
+        // Register as MCP server
+        log({ level: 'info', msg: `Registering ${name} as streamable HTTP MCP server: ${serverName}` })
+        server = await this.mcpService.addServer({
+          name: serverName,
+          transportType: 'streamable_http',
+          url: url!,
+          headers,
+          sessionId,
+          reconnectionOptions,
+          secretName,
+          enabled
+        })
+      } else {
+        const stdioArgs = [...(args ?? [])]
+        const stdioEnv = env ?? {}
 
-        // Check if the package has bin entries
-        const nodeModulesPackageJsonPath = path.join(packageDir, 'node_modules', name, 'package.json')
-        if (existsSync(nodeModulesPackageJsonPath)) {
-          const nodeModulesPackageJson = JSON.parse(await readFile(nodeModulesPackageJsonPath, 'utf8'))
+        // Determine run command if not provided
+        let finalCommand = command
+        if (!finalCommand) {
+          // Get the relative package directory path (from project root)
+          const relativePackageDir = path.relative(process.cwd(), packageDir)
 
-          if (nodeModulesPackageJson.bin) {
-            // If bin is a string, use that
-            if (typeof nodeModulesPackageJson.bin === 'string') {
-              finalCommand = 'node'
-              // Use relative path with ./ prefix
-              args.unshift(`./${path.join(relativePackageDir, 'node_modules', name, nodeModulesPackageJson.bin)}`)
+          // Check if the package has bin entries
+          const nodeModulesPackageJsonPath = path.join(packageDir, 'node_modules', name, 'package.json')
+          if (existsSync(nodeModulesPackageJsonPath)) {
+            const nodeModulesPackageJson = JSON.parse(await readFile(nodeModulesPackageJsonPath, 'utf8'))
+
+            if (nodeModulesPackageJson.bin) {
+              // If bin is a string, use that
+              if (typeof nodeModulesPackageJson.bin === 'string') {
+                finalCommand = 'node'
+                // Use relative path with ./ prefix
+                stdioArgs.unshift(
+                  `./${path.join(relativePackageDir, 'node_modules', name, nodeModulesPackageJson.bin)}`
+                )
+              }
+              // If bin is an object, use the first entry
+              else if (typeof nodeModulesPackageJson.bin === 'object') {
+                const binName = Object.keys(nodeModulesPackageJson.bin)[0]
+                finalCommand = 'node'
+                // Use relative path with ./ prefix
+                stdioArgs.unshift(
+                  `./${path.join(relativePackageDir, 'node_modules', name, nodeModulesPackageJson.bin[binName])}`
+                )
+              }
             }
-            // If bin is an object, use the first entry
-            else if (typeof nodeModulesPackageJson.bin === 'object') {
-              const binName = Object.keys(nodeModulesPackageJson.bin)[0]
+            // Fall back to main file
+            else if (nodeModulesPackageJson.main) {
               finalCommand = 'node'
               // Use relative path with ./ prefix
-              args.unshift(
-                `./${path.join(relativePackageDir, 'node_modules', name, nodeModulesPackageJson.bin[binName])}`
+              stdioArgs.unshift(
+                `./${path.join(relativePackageDir, 'node_modules', name, nodeModulesPackageJson.main)}`
               )
             }
           }
-          // Fall back to main file
-          else if (nodeModulesPackageJson.main) {
+
+          // If we still don't have a command, use a default
+          if (!finalCommand) {
             finalCommand = 'node'
             // Use relative path with ./ prefix
-            args.unshift(`./${path.join(relativePackageDir, 'node_modules', name, nodeModulesPackageJson.main)}`)
+            stdioArgs.unshift(`./${path.join(relativePackageDir, 'node_modules', name)}`)
           }
         }
 
-        // If we still don't have a command, use a default
-        if (!finalCommand) {
-          finalCommand = 'node'
-          // Use relative path with ./ prefix
-          args.unshift(`./${path.join(relativePackageDir, 'node_modules', name)}`)
-        }
+        // Register as MCP server
+        log({ level: 'info', msg: `Registering ${name} as MCP server: ${serverName}` })
+        server = await this.mcpService.addServer({
+          name: serverName,
+          transportType: 'stdio',
+          command: finalCommand,
+          args: stdioArgs,
+          env: stdioEnv,
+          secretName,
+          enabled
+        })
       }
-
-      // Register as MCP server
-      log({ level: 'info', msg: `Registering ${name} as MCP server: ${serverName}` })
-      const server = await this.mcpService.addServer({
-        name: serverName,
-        command: finalCommand,
-        args,
-        env,
-        secretName,
-        enabled
-      })
 
       // Update package info with success
       packageInfo.status = 'installed'
@@ -488,7 +556,6 @@ export class PackageService {
         await this.packagesDBClient.update(packageInfo, { mcpServerId: serverName })
         return { success: false, error: packageInfo.error }
       }
-
       // Disable server temporarily
       const wasEnabled = server.enabled
       if (wasEnabled) {
@@ -523,15 +590,49 @@ export class PackageService {
         packageInfo.lastUpgraded = new Date()
         packageInfo.updateAvailable = false
 
-        // Check if the package structure has changed
-        let serverUpdateNeeded = false
-        let newCommand = server.command
-        let newArgs = [...server.args]
+        let updatedServer: MCPServer = server
+        if (server.transportType === 'stdio') {
+          // Check if the package structure has changed
+          let serverUpdateNeeded = false
+          let newCommand = server.command
+          let newArgs = [...server.args]
 
-        // Check if the package has bin entries
-        if (nodeModulesPackageJson.bin) {
-          // If bin is a string, use that
-          if (typeof nodeModulesPackageJson.bin === 'string') {
+          // Check if the package has bin entries
+          if (nodeModulesPackageJson.bin) {
+            // If bin is a string, use that
+            if (typeof nodeModulesPackageJson.bin === 'string') {
+              newCommand = 'node'
+              // Replace the first arg with the new path
+              if (newArgs.length > 0) {
+                const relativePackageDir = path.relative(process.cwd(), packageDir)
+                newArgs[0] = `./${path.join(
+                  relativePackageDir,
+                  'node_modules',
+                  packageInfo.name,
+                  nodeModulesPackageJson.bin
+                )}`
+                serverUpdateNeeded = true
+              }
+            }
+            // If bin is an object, use the first entry
+            else if (typeof nodeModulesPackageJson.bin === 'object') {
+              const binName = Object.keys(nodeModulesPackageJson.bin)[0]
+              newCommand = 'node'
+              // Replace the first arg with the new path
+              if (newArgs.length > 0) {
+                const relativePackageDir = path.relative(process.cwd(), packageDir)
+                newArgs[0] = `./${path.join(
+                  relativePackageDir,
+                  'node_modules',
+                  packageInfo.name,
+                  nodeModulesPackageJson.bin[binName]
+                )}`
+                serverUpdateNeeded = true
+              }
+            }
+          }
+          // Fall back to main file
+          else if (nodeModulesPackageJson.main) {
             newCommand = 'node'
             // Replace the first arg with the new path
             if (newArgs.length > 0) {
@@ -540,55 +641,25 @@ export class PackageService {
                 relativePackageDir,
                 'node_modules',
                 packageInfo.name,
-                nodeModulesPackageJson.bin
+                nodeModulesPackageJson.main
               )}`
               serverUpdateNeeded = true
             }
           }
-          // If bin is an object, use the first entry
-          else if (typeof nodeModulesPackageJson.bin === 'object') {
-            const binName = Object.keys(nodeModulesPackageJson.bin)[0]
-            newCommand = 'node'
-            // Replace the first arg with the new path
-            if (newArgs.length > 0) {
-              const relativePackageDir = path.relative(process.cwd(), packageDir)
-              newArgs[0] = `./${path.join(
-                relativePackageDir,
-                'node_modules',
-                packageInfo.name,
-                nodeModulesPackageJson.bin[binName]
-              )}`
-              serverUpdateNeeded = true
-            }
-          }
-        }
-        // Fall back to main file
-        else if (nodeModulesPackageJson.main) {
-          newCommand = 'node'
-          // Replace the first arg with the new path
-          if (newArgs.length > 0) {
-            const relativePackageDir = path.relative(process.cwd(), packageDir)
-            newArgs[0] = `./${path.join(
-              relativePackageDir,
-              'node_modules',
-              packageInfo.name,
-              nodeModulesPackageJson.main
-            )}`
-            serverUpdateNeeded = true
-          }
-        }
 
-        // Update server configuration if needed
-        let updatedServer = server
-        if (serverUpdateNeeded) {
-          const updatedServerResult = await this.mcpService.updateServer(serverName, {
-            command: newCommand,
-            args: newArgs
-          })
-          if (!updatedServerResult) {
-            throw new Error(`Failed to update server configuration for ${serverName}`)
+          if (serverUpdateNeeded) {
+            const updatedServerResult = await this.mcpService.updateServer(serverName, {
+              command: newCommand,
+              args: newArgs
+            })
+            if (!updatedServerResult) {
+              throw new Error(`Failed to update server configuration for ${serverName}`)
+            }
+            if (updatedServerResult.transportType !== 'stdio') {
+              throw new Error(`Updated server ${serverName} is not stdio; upgrade cannot continue.`)
+            }
+            updatedServer = updatedServerResult
           }
-          updatedServer = updatedServerResult
         }
 
         // Re-enable server if it was enabled before
@@ -596,6 +667,9 @@ export class PackageService {
           const enabledServer = await this.mcpService.enableServer(serverName)
           if (!enabledServer) {
             throw new Error(`Failed to re-enable server ${serverName} after upgrade`)
+          }
+          if (enabledServer.transportType !== server.transportType) {
+            throw new Error(`Re-enabled server ${serverName} transport type changed during upgrade.`)
           }
           updatedServer = enabledServer
         }

@@ -590,35 +590,65 @@
             "type": "string",
             "description": "Assigned server name (ID)"
           },
+          "transportType": {
+            "type": "string",
+            "enum": ["stdio", "streamable_http"],
+            "description": "Transport type for the server."
+          },
           "command": {
             "type": "string",
-            "description": "Command used to run the server"
+            "description": "Command used to run the server (stdio only)"
           },
           "args": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Arguments passed to the command"
+            "description": "Arguments passed to the command (stdio only)"
           },
           "env": {
             "type": "object",
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Environment variables for the server process"
+            "description": "Environment variables for the server process (stdio only)"
+          },
+          "url": {
+            "type": "string",
+            "description": "Streamable HTTP endpoint URL (streamable_http only)."
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "HTTP headers to send with requests (streamable_http only)."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional MCP session ID to resume (streamable_http only)."
+          },
+          "reconnectionOptions": {
+            "type": "object",
+            "description": "Reconnection behavior for SSE streams (streamable_http only).",
+            "properties": {
+              "maxReconnectionDelay": { "type": "number" },
+              "initialReconnectionDelay": { "type": "number" },
+              "reconnectionDelayGrowFactor": { "type": "number" },
+              "maxRetries": { "type": "number" }
+            }
           },
           "status": {
             "type": "string",
             "description": "Current status of the server process",
-            "enum": ["connected", "disconnected", "starting", "stopping", "error"]
+            "enum": ["connected", "connecting", "disconnected", "error"]
           },
           "enabled": {
             "type": "boolean",
             "description": "Whether the server is configured to be enabled"
           }
         },
-         "required": ["name", "command", "args", "env", "status", "enabled"]
+         "required": ["name", "transportType", "status", "enabled"]
       },
       "InstallPackageRequest": {
         "type": "object",
@@ -631,27 +661,57 @@
             "type": "string",
             "description": "Name to assign to the server"
           },
+          "transportType": {
+            "type": "string",
+            "enum": ["stdio", "streamable_http"],
+            "description": "Transport type for the server. Defaults to stdio if omitted."
+          },
           "version": {
             "type": "string",
             "description": "Specific version to install (optional, defaults to latest)"
           },
           "command": {
             "type": "string",
-            "description": "Custom command to run the server (optional)"
+            "description": "Custom command to run the server (stdio only, optional)"
           },
           "args": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Array of arguments for the command (optional)"
+            "description": "Array of arguments for the command (stdio only, optional)"
           },
           "env": {
             "type": "object",
             "additionalProperties": {
               "type": "string"
             },
-            "description": "Environment variables (optional)"
+            "description": "Environment variables (stdio only, optional)"
+          },
+          "url": {
+            "type": "string",
+            "description": "Streamable HTTP endpoint URL (streamable_http only)."
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "HTTP headers to send with requests (streamable_http only)."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "Optional MCP session ID to resume (streamable_http only)."
+          },
+          "reconnectionOptions": {
+            "type": "object",
+            "description": "Reconnection behavior for SSE streams (streamable_http only).",
+            "properties": {
+              "maxReconnectionDelay": { "type": "number" },
+              "initialReconnectionDelay": { "type": "number" },
+              "reconnectionDelayGrowFactor": { "type": "number" },
+              "maxRetries": { "type": "number" }
+            }
           },
           "enabled": {
             "type": "boolean",
