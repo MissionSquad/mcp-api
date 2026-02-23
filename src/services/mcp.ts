@@ -878,13 +878,34 @@ export class MCPService implements Resource {
       log({ level: 'error', msg: `Server ${serverName} not connected. Status: ${server.status}` })
       return undefined
     }
-    const secrets = await this.secretsService.getSecrets(username)
-    if (secrets != null) {
-      args = { ...args, ...secrets }
-      log({
-        level: 'info',
-        msg: `Secrets applied to tool call - ${serverName}:${methodName} - ${Object.keys(secrets).join(', ')}`
-      })
+    const allSecrets = await this.secretsService.getSecrets(username)
+    if (allSecrets != null) {
+      // Get server's declared secret names from metadata
+      const serverSecretNames = server.secretNames ?? (server.secretName ? [server.secretName] : [])
+
+      if (serverSecretNames.length > 0) {
+        // Inject ONLY secrets declared by this server
+        const scopedSecrets: Record<string, string> = {}
+        for (const name of serverSecretNames) {
+          if (allSecrets[name] !== undefined) {
+            scopedSecrets[name] = allSecrets[name]
+          }
+        }
+        args = { ...args, ...scopedSecrets }
+        log({
+          level: 'info',
+          msg: `Scoped secrets applied to tool call - ${serverName}:${methodName} - ${Object.keys(scopedSecrets).join(', ')}`
+        })
+      } else {
+        // Backward compatibility: if server has no declared secretNames,
+        // fall back to injecting all secrets (preserves existing behavior
+        // for servers not yet migrated to secretNames metadata).
+        args = { ...args, ...allSecrets }
+        log({
+          level: 'warn',
+          msg: `Server ${serverName} has no declared secretNames — injecting all secrets (legacy behavior)`
+        })
+      }
     }
     log({ level: 'info', msg: `Calling tool - ${serverName}:${methodName}` })
     const requestOptions: RequestOptions = {}

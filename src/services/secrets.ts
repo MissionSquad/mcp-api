@@ -57,7 +57,11 @@ export class Secrets {
     secretValue: string
     action: 'save' | 'update' | 'delete'
   }) {
-    if (!secretName || !secretValue || !action) {
+    if (!secretName || !action) {
+      return false
+    }
+    // secretValue is required for save/update but not for delete
+    if (action !== 'delete' && !secretValue) {
       return false
     }
 
