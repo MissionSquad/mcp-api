@@ -911,6 +911,7 @@ export class MCPService implements Resource {
       }
     }
     log({ level: 'info', msg: `Calling tool - ${serverName}:${methodName}` })
+    log({ level: 'debug', msg: `callTool arguments keys: ${Object.keys(args).join(', ')}` })
     const requestOptions: RequestOptions = {}
     if (server.startupTimeout) {
       requestOptions.timeout = server.startupTimeout
