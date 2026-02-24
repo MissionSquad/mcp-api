@@ -883,15 +883,21 @@ export class MCPService implements Resource {
       // Get server's declared secret names from metadata
       const serverSecretNames = server.secretNames ?? (server.secretName ? [server.secretName] : [])
 
+      // Extract secrets belonging to this server: keys stored as "${serverName}.${secretName}"
+      const prefix = `${serverName}.`
+      const serverSecrets: Record<string, string> = {}
+      for (const [key, value] of Object.entries(allSecrets)) {
+        if (key.startsWith(prefix)) {
+          serverSecrets[key.slice(prefix.length)] = value
+        }
+      }
+
       if (serverSecretNames.length > 0) {
-        // Inject ONLY secrets declared by this server
+        // Inject only the declared secret names
         const scopedSecrets: Record<string, string> = {}
         for (const name of serverSecretNames) {
-          const prefixedName = `${serverName}.${name}`
-          if (allSecrets[name] !== undefined) {
-            scopedSecrets[name] = allSecrets[name]
-          } else if (allSecrets[prefixedName] !== undefined) {
-            scopedSecrets[name] = allSecrets[prefixedName]
+          if (serverSecrets[name] !== undefined) {
+            scopedSecrets[name] = serverSecrets[name]
           }
         }
         args = { ...args, ...scopedSecrets }
@@ -900,13 +906,11 @@ export class MCPService implements Resource {
           msg: `Scoped secrets applied to tool call - ${serverName}:${methodName} - ${Object.keys(scopedSecrets).join(', ')}`
         })
       } else {
-        // Backward compatibility: if server has no declared secretNames,
-        // fall back to injecting all secrets (preserves existing behavior
-        // for servers not yet migrated to secretNames metadata).
-        args = { ...args, ...allSecrets }
+        // No declared secretNames — inject all secrets belonging to this server
+        args = { ...args, ...serverSecrets }
         log({
-          level: 'warn',
-          msg: `Server ${serverName} has no declared secretNames — injecting all secrets (legacy behavior)`
+          level: 'info',
+          msg: `Server secrets applied to tool call - ${serverName}:${methodName} - ${Object.keys(serverSecrets).join(', ')}`
         })
       }
     }
