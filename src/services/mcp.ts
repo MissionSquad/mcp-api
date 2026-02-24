@@ -887,8 +887,11 @@ export class MCPService implements Resource {
         // Inject ONLY secrets declared by this server
         const scopedSecrets: Record<string, string> = {}
         for (const name of serverSecretNames) {
+          const prefixedName = `${serverName}.${name}`
           if (allSecrets[name] !== undefined) {
             scopedSecrets[name] = allSecrets[name]
+          } else if (allSecrets[prefixedName] !== undefined) {
+            scopedSecrets[name] = allSecrets[prefixedName]
           }
         }
         args = { ...args, ...scopedSecrets }
