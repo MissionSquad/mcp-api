@@ -352,8 +352,8 @@ export class PackageService {
         })
 
         const installedVersion = await this.pipShowVersion(venvAbsolutePath, name)
-        const pythonCommand = this.venvPythonPath(venvAbsolutePath)
-        const pythonArgs = this.buildPythonArgs(request.pythonModule, request.pythonArgs)
+        const pythonCommand = command ?? this.venvPythonPath(venvAbsolutePath)
+        const pythonArgs = command ? (args ?? []) : this.buildPythonArgs(request.pythonModule, request.pythonArgs)
         const pythonEnv = this.buildPythonEnv(venvAbsolutePath, envVars)
 
         const server = await this.mcpService.addServer({
