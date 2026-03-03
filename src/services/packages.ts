@@ -33,6 +33,7 @@ export interface PackageInfo {
   venvPath?: string
   pipIndexUrl?: string
   pipExtraIndexUrl?: string
+  pipDependencies?: string[]
 }
 
 export interface InstallPackageRequest {
@@ -55,6 +56,7 @@ export interface InstallPackageRequest {
   pythonArgs?: string[]
   pipIndexUrl?: string
   pipExtraIndexUrl?: string
+  pipDependencies?: string[]
 }
 
 const packageIndexes: IndexDefinition[] = [{ name: 'name', key: { name: 1 } }]
@@ -130,11 +132,11 @@ export class PackageService {
   private async pipInstall(
     venvAbsolutePath: string,
     spec: string,
-    options: { indexUrl?: string; extraIndexUrl?: string },
+    options: { indexUrl?: string; extraIndexUrl?: string; additionalSpecs?: string[] },
     extraArgs: string[] = []
   ): Promise<void> {
     const pipPath = this.venvPipPath(venvAbsolutePath)
-    const args = ['install', ...extraArgs, spec]
+    const args = ['install', ...extraArgs, spec, ...options.additionalSpecs ?? []]
     if (options.indexUrl) {
       args.push('--index-url', options.indexUrl)
     }
@@ -336,7 +338,8 @@ export class PackageService {
         pythonModule: request.pythonModule,
         pythonArgs: request.pythonArgs,
         pipIndexUrl: request.pipIndexUrl ?? env.PIP_INDEX_URL,
-        pipExtraIndexUrl: request.pipExtraIndexUrl ?? env.PIP_EXTRA_INDEX_URL
+        pipExtraIndexUrl: request.pipExtraIndexUrl ?? env.PIP_EXTRA_INDEX_URL,
+        pipDependencies: request.pipDependencies
       }
 
       await this.packagesDBClient.upsert(pythonPackageInfo, { name })
@@ -348,7 +351,8 @@ export class PackageService {
         const spec = version ? `${name}==${version}` : name
         await this.pipInstall(venvAbsolutePath, spec, {
           indexUrl: pythonPackageInfo.pipIndexUrl,
-          extraIndexUrl: pythonPackageInfo.pipExtraIndexUrl
+          extraIndexUrl: pythonPackageInfo.pipExtraIndexUrl,
+          additionalSpecs: request.pipDependencies
         })
 
         const installedVersion = await this.pipShowVersion(venvAbsolutePath, name)
@@ -812,7 +816,8 @@ export class PackageService {
             spec,
             {
               indexUrl: packageInfo.pipIndexUrl ?? env.PIP_INDEX_URL,
-              extraIndexUrl: packageInfo.pipExtraIndexUrl ?? env.PIP_EXTRA_INDEX_URL
+              extraIndexUrl: packageInfo.pipExtraIndexUrl ?? env.PIP_EXTRA_INDEX_URL,
+              additionalSpecs: packageInfo.pipDependencies
             },
             ['--upgrade']
           )
