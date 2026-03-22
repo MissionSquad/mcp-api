@@ -124,24 +124,39 @@ For Python MCP servers that require Python 3.13+ (for example `klaviyo-mcp-serve
 POST /packages/install
 ```
 
-Request body:
+**Node.js stdio** request body:
 
 ```json
 {
   "name": "package-name",
-  "version": "1.0.0", // Optional, defaults to "latest"
+  "version": "1.0.0",
   "serverName": "unique-server-name",
   "transportType": "stdio",
-  "command": "node", // Optional, auto-detected if not provided
-  "args": ["--option1", "--option2"], // Optional
+  "command": "node",
+  "args": ["--option1", "--option2"],
   "env": {
-    // Optional
     "NODE_ENV": "production"
-  }
+  },
+  "secretName": "API_KEY",
+  "enabled": true,
+  "failOnWarning": false
 }
 ```
 
-Streamable HTTP install example:
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string | Yes | — | npm package name |
+| `version` | string | No | `"latest"` | Package version to install |
+| `serverName` | string | Yes | — | Unique MCP server identifier |
+| `transportType` | string | No | `"stdio"` | `"stdio"` or `"streamable_http"` |
+| `command` | string | No | Auto-detected | Command to start the server. If omitted, resolved from the package's `bin` or `main` field |
+| `args` | string[] | No | `[]` | Command-line arguments |
+| `env` | object | No | `{}` | Environment variables for the server process |
+| `secretName` | string | No | — | Secret name to associate with this server |
+| `enabled` | boolean | No | `true` | Whether to start the server after installation |
+| `failOnWarning` | boolean | No | `false` | Fail installation if npm emits warnings |
+
+**Streamable HTTP** install example:
 
 ```json
 {
@@ -157,7 +172,16 @@ Streamable HTTP install example:
 }
 ```
 
-Python stdio install example:
+Additional fields for `streamable_http`:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `url` | string | Yes | The MCP HTTP endpoint |
+| `headers` | object | No | Static HTTP headers to send with requests |
+| `sessionId` | string | No | Session ID to resume a previous session |
+| `reconnectionOptions` | object | No | SSE reconnection settings (see Server Management) |
+
+**Python stdio** install example:
 
 ```json
 {
@@ -170,12 +194,45 @@ Python stdio install example:
 }
 ```
 
-If `transportType` is omitted, the API defaults to `stdio`. For `streamable_http`, `command`, `args`, and `env` are ignored.
-For `runtime: "python"`, `pythonModule` is required and `transportType` must be `stdio`.
-Python installs always use a virtual environment at `packages/python/<serverName>` (or `PYTHON_VENV_DIR` if configured).
-Python upgrades run `pip install --upgrade` inside that same virtual environment.
-For Python runtime, `installPath` and `venvPath` are the same directory.
-If `pipIndexUrl` or `pipExtraIndexUrl` are provided during install, they are persisted and reused for upgrades and update checks.
+Python packages with a console script entry point (no `__main__.py`) require the `command` field to point to the console script binary installed in the venv. When `command` is provided, `pythonModule` is still required for metadata purposes but is not used to build the run command:
+
+```json
+{
+  "name": "klaviyo-mcp-server",
+  "serverName": "klaviyo",
+  "runtime": "python",
+  "pythonModule": "klaviyo_mcp_server",
+  "command": "/app/packages/python/klaviyo/bin/klaviyo-mcp-server",
+  "pipDependencies": ["fastmcp<3"],
+  "env": {
+    "PRIVATE_API_KEY": "your-api-key",
+    "READ_ONLY": "false",
+    "ALLOW_USER_GENERATED_CONTENT": "false"
+  }
+}
+```
+
+Additional fields for `runtime: "python"`:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `runtime` | string | Yes | Must be `"python"` |
+| `pythonModule` | string | Yes | Python module name (e.g. `my_mcp_server`). Used with `python -m` unless `command` is provided |
+| `pythonArgs` | string[] | No | Additional arguments passed after the module name |
+| `command` | string | No | Override the default `python -m <module>` command. Use for packages that expose a console script entry point instead of `__main__.py` |
+| `args` | string[] | No | Arguments for the command when `command` is provided (replaces `pythonArgs`) |
+| `pipDependencies` | string[] | No | Additional pip specs installed alongside the main package (e.g. `["fastmcp<3", "requests>=2.28"]`). Persisted and reused during upgrades |
+| `pipIndexUrl` | string | No | Custom PyPI index URL for pip |
+| `pipExtraIndexUrl` | string | No | Additional PyPI index URL for pip |
+
+**Python install behavior:**
+
+- If `transportType` is omitted, the API defaults to `"stdio"`. Python runtime only supports `"stdio"`.
+- A virtual environment is created at `packages/python/<serverName>` (or `PYTHON_VENV_DIR/<serverName>` if configured).
+- Without `command`: the server runs as `<venv>/bin/python -u -m <pythonModule> [pythonArgs...]`
+- With `command`: the server runs as `<command> [args...]` with the venv environment variables set.
+- `pipDependencies` are installed in the same `pip install` invocation as the main package.
+- `pipIndexUrl`, `pipExtraIndexUrl`, and `pipDependencies` are persisted on the package record and reused for upgrades and update checks.
 
 #### List Installed Packages
 
@@ -228,6 +285,24 @@ Both endpoints return version information and support the `checkUpdates=true` qu
 ```
 DELETE /packages/:name
 ```
+
+Removes the package files, stops the associated MCP server, and deletes the server configuration.
+
+#### Enable a Package
+
+```
+PUT /packages/:name/enable
+```
+
+Enables a previously disabled package and starts its associated MCP server.
+
+#### Disable a Package
+
+```
+PUT /packages/:name/disable
+```
+
+Disables a package and stops its associated MCP server without removing it.
 
 #### Check for Package Updates
 
@@ -702,6 +777,9 @@ Parameters:
 - `headers`: (Optional for streamable_http) Static headers to send with requests
 - `sessionId`: (Optional for streamable_http) Persisted session ID to resume
 - `reconnectionOptions`: (Optional for streamable_http) SSE reconnection settings
+- `secretNames`: (Optional) Array of secret names this server expects (e.g. `["API_KEY", "API_SECRET"]`). Only these secrets are injected during tool calls. Replaces the legacy `secretName` field.
+- `secretName`: (Optional, legacy) Single secret name. Automatically migrated to `secretNames` array on load.
+- `startupTimeout`: (Optional) Custom timeout in milliseconds for tool discovery after connection. Defaults to 180,000ms (3 minutes). Maximum 300,000ms (5 minutes).
 - `enabled`: (Optional) Whether the server should be enabled immediately (defaults to true)
 
 Response format:
@@ -752,13 +830,14 @@ Request body:
 
 ```json
 {
-  "command": "./updated/path/to/server.js", // Optional
-  "args": ["--new-option"], // Optional
+  "command": "./updated/path/to/server.js",
+  "args": ["--new-option"],
   "env": {
-    // Optional
     "NODE_ENV": "development"
   },
-  "enabled": false // Optional
+  "secretNames": ["API_KEY"],
+  "startupTimeout": 60000,
+  "enabled": false
 }
 ```
 
@@ -1160,6 +1239,162 @@ The system uses a "declaration" pattern. An MCP server can declare its need for 
         3.  Retrieves the global application credentials from the `GOOGLE_OAUTH_CREDENTIALS` environment variable.
         4.  Injects both sets of credentials as hidden parameters into the tool call.
     *   The `mcp-google-workspace` server receives these credentials, creates a temporary authenticated client, and executes the tool. The front-end never handles any tokens.
+
+### Health Check
+
+```
+GET /healthz
+```
+
+Returns `{ "status": "ok" }` when the server is running. Useful for container orchestration health probes.
+
+### Built-in Servers
+
+MCP API ships with built-in servers that run in-process (no child process spawned). Built-in servers are always connected, cannot be deleted or disabled by users, and appear alongside dynamically registered servers in API responses.
+
+#### Web Tools (SearXNG)
+
+**Server name:** `webtools`
+
+Provides two tools:
+
+| Tool | Description |
+|------|-------------|
+| `web_search` | Search the web via a SearXNG instance |
+| `get_url_content` | Fetch a URL and convert the page content to markdown (uses Puppeteer) |
+
+Requires the `SEARXNG_URL` environment variable to be set. If not configured, the `web_search` tool is unavailable.
+
+### Auto-Install on First Run
+
+The `INSTALL_ON_START` environment variable configures packages to install automatically on the first application start. The format is a comma-separated list of `repo|serverName` pairs:
+
+```
+INSTALL_ON_START=@missionsquad/mcp-github|github,@missionsquad/mcp-helper-tools|helper-tools
+```
+
+Behavior:
+- Only runs once (tracked via the `appState` MongoDB collection)
+- Skips packages that were previously installed and then uninstalled by the user
+- Each entry installs the npm package and registers it as an MCP server with the given name
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DEBUG` | `false` | Enable debug logging |
+| `PORT` | `8080` | HTTP server port |
+| `MONGO_USER` | `root` | MongoDB username |
+| `MONGO_PASS` | `example` | MongoDB password |
+| `MONGO_HOST` | `localhost:27017` | MongoDB host and port |
+| `MONGO_DBNAME` | `squad-test` | MongoDB database name for MCP server records and packages |
+| `MONGO_REPLICASET` | — | MongoDB replica set name (optional, for replica set connections) |
+| `PAYLOAD_LIMIT` | `6mb` | Maximum request body size |
+| `SECRETS_KEY` | `secret` | AES-256-GCM encryption key for secrets. **Must be changed in production.** |
+| `SECRETS_DBNAME` | `secrets` | MongoDB database name for encrypted secrets |
+| `INSTALL_ON_START` | `@missionsquad/mcp-github\|github,@missionsquad/mcp-helper-tools\|helper-tools` | Packages to auto-install on first run (see Auto-Install on First Run) |
+| `SEARXNG_URL` | — | SearXNG instance URL for the built-in web search tool |
+| `PYTHON_BIN` | — | Path to Python executable. Falls back to `python3` then `python` if not set |
+| `PYTHON_VENV_DIR` | `packages/python` | Base directory for Python virtual environments |
+| `PIP_INDEX_URL` | — | Custom PyPI index URL for pip |
+| `PIP_EXTRA_INDEX_URL` | — | Additional PyPI index URL for pip |
+| `GOOGLE_OAUTH_CREDENTIALS` | — | Full Google OAuth credentials JSON (single-line string) for the Stdio OAuth2 flow |
+
+## Installation Examples
+
+### Node.js Package (Auto-Detected Entry Point)
+
+The simplest case. The API installs the npm package and resolves the entry point from the package's `bin` or `main` field:
+
+```json
+POST /packages/install
+
+{
+  "name": "@missionsquad/mcp-github",
+  "serverName": "github"
+}
+```
+
+### Node.js Package (Custom Command)
+
+When you need to specify the command and arguments explicitly:
+
+```json
+POST /packages/install
+
+{
+  "name": "@modelcontextprotocol/server-filesystem",
+  "serverName": "filesystem",
+  "command": "node",
+  "args": ["./packages/modelcontextprotocol-server-filesystem/node_modules/@modelcontextprotocol/server-filesystem/dist/index.js", "/data"],
+  "env": {
+    "NODE_ENV": "production"
+  }
+}
+```
+
+### Python Package (Standard `python -m` Entry)
+
+For Python packages that support `python -m <module>`:
+
+```json
+POST /packages/install
+
+{
+  "name": "my-python-mcp",
+  "serverName": "python-mcp",
+  "runtime": "python",
+  "pythonModule": "my_python_mcp"
+}
+```
+
+The server will run as: `<venv>/bin/python -u -m my_python_mcp`
+
+### Python Package (Console Script Entry Point)
+
+Some Python packages expose a console script instead of supporting `python -m`. Use the `command` field to point to the installed console script binary in the venv:
+
+```json
+POST /packages/install
+
+{
+  "name": "klaviyo-mcp-server",
+  "version": "0.3.0",
+  "serverName": "klaviyo",
+  "runtime": "python",
+  "pythonModule": "klaviyo_mcp_server",
+  "command": "/app/packages/python/klaviyo/bin/klaviyo-mcp-server",
+  "pipDependencies": ["fastmcp<3"],
+  "env": {
+    "PRIVATE_API_KEY": "your-api-key",
+    "READ_ONLY": "false",
+    "ALLOW_USER_GENERATED_CONTENT": "false"
+  }
+}
+```
+
+Notes:
+- `command` overrides the default `python -m <module>` invocation
+- `pipDependencies` installs additional pip specs alongside the main package (useful for pinning transitive dependency versions)
+- The venv path follows the pattern `<PYTHON_VENV_DIR>/<serverName>`, so the console script binary is at `<venv>/bin/<script-name>`
+
+### Streamable HTTP Package
+
+For remote MCP servers accessible over HTTP:
+
+```json
+POST /packages/install
+
+{
+  "name": "remote-mcp-package",
+  "serverName": "remote-server",
+  "transportType": "streamable_http",
+  "url": "https://example.com/mcp",
+  "headers": {
+    "X-Custom-Header": "value"
+  }
+}
+```
 
 ## Security Considerations
 

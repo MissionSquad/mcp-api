@@ -2,6 +2,7 @@ import { IndexDefinition, MongoConnectionParams, MongoDBClient } from '../utils/
 import { SecretEncryptor } from '../utils/secretEncryptor'
 import { env } from '../env'
 import { log } from '../utils/general'
+import type { SaveUserServerSecretsInput } from './mcp'
 
 export interface UserSecret {
   username: string
@@ -85,5 +86,62 @@ export class Secrets {
         return false
     }
     return true
+  }
+
+  public async saveUserServerSecrets(input: SaveUserServerSecretsInput): Promise<void> {
+    for (const secret of input.secrets) {
+      const encryptedSecretValue = this.secrets.encrypt(secret.value)
+      await this.secretsDBClient.upsert(
+        {
+          username: input.username,
+          key: `${input.serverName}.${secret.name}`,
+          value: encryptedSecretValue
+        },
+        {
+          username: input.username,
+          key: `${input.serverName}.${secret.name}`
+        }
+      )
+    }
+  }
+
+  public async deleteSecretsByServerPrefix(serverName: string, username: string): Promise<void> {
+    await this.secretsDBClient.delete({
+      username,
+      key: { $regex: `^${serverName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.` }
+    } as any)
+  }
+
+  public async listSecretNamesByServerPrefix(serverName: string, username: string): Promise<string[]> {
+    const records = await this.secretsDBClient.find({
+      username,
+      key: { $regex: `^${serverName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.` }
+    } as any)
+
+    return records.map((record) => record.key.slice(serverName.length + 1))
+  }
+
+  public async getUserServerSecrets(serverName: string, username: string): Promise<Record<string, string>> {
+    const records = await this.secretsDBClient.find({
+      username,
+      key: { $regex: `^${serverName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.` }
+    } as any)
+
+    return records.reduce((acc, record) => {
+      const secretName = record.key.slice(serverName.length + 1)
+      if (!secretName) {
+        return acc
+      }
+      acc[secretName] = this.secrets.decrypt(record.value)
+      return acc
+    }, {} as Record<string, string>)
+  }
+
+  public async listUsernamesByServerPrefix(serverName: string): Promise<string[]> {
+    const records = await this.secretsDBClient.find({
+      key: { $regex: `^${serverName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.` }
+    } as any)
+
+    return Array.from(new Set(records.map((record) => record.username).filter(Boolean)))
   }
 }
