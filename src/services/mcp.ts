@@ -68,6 +68,7 @@ export type ToolsList = {
 export type MCPTransportType = 'stdio' | 'streamable_http'
 export type McpServerSource = 'platform' | 'external'
 export type McpServerAuthMode = 'none' | 'oauth2'
+export type McpExternalOAuthDiscoverySource = 'prm' | 'issuer_override'
 
 export interface McpExternalSecretField {
   name: string
@@ -80,7 +81,7 @@ export interface McpExternalSecretField {
 export interface McpExternalOAuthTemplate {
   authorizationServerIssuer: string
   authorizationServerMetadataUrl: string
-  resourceMetadataUrl: string
+  resourceMetadataUrl?: string
   resourceUri: string
   authorizationEndpoint: string
   tokenEndpoint: string
@@ -89,6 +90,7 @@ export interface McpExternalOAuthTemplate {
   codeChallengeMethodsSupported: string[]
   pkceRequired: boolean
   discoveryMode: 'auto' | 'manual'
+  discoverySource?: McpExternalOAuthDiscoverySource
   registrationMode: 'cimd' | 'dcr' | 'manual'
   manualClientCredentialsAllowed?: boolean
   clientIdMetadataDocumentSupported?: boolean
@@ -98,6 +100,7 @@ export interface McpExternalOAuthTemplate {
 
 export interface DiscoverExternalAuthorizationInput {
   url: string
+  authorizationServerIssuerOverride?: string
 }
 
 export interface SuccessfulAuthorizationServerMetadataDocument {
@@ -124,8 +127,9 @@ export interface DiscoveredAuthorizationServer {
 
 export interface DiscoverExternalAuthorizationResult {
   serverUrl: string
-  resourceMetadataUrl: string
+  resourceMetadataUrl?: string
   resourceUri: string
+  discoverySource: McpExternalOAuthDiscoverySource
   challengedScopes?: string[]
   authorizationServers: DiscoveredAuthorizationServer[]
   recommendedRegistrationMode: 'cimd' | 'dcr' | 'manual'
@@ -442,6 +446,47 @@ export const canonicalizeExternalOAuthResourceUri = (input: string): string => {
   return parsed.toString()
 }
 
+const INVALID_ISSUER_OVERRIDE_PATH_SUFFIXES = [
+  '/authorize',
+  '/authorization',
+  '/oauth/token',
+  '/token',
+  '/openid-configuration',
+  '/oauth-authorization-server'
+] as const
+
+export const normalizeAuthorizationServerIssuerOverride = (input: string): string => {
+  const trimmed = input.trim()
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    throw new McpValidationError('authorizationServerIssuerOverride must be a valid absolute HTTPS URL')
+  }
+
+  if (parsed.protocol !== 'https:') {
+    throw new McpValidationError('authorizationServerIssuerOverride must use https')
+  }
+  if (parsed.username || parsed.password) {
+    throw new McpValidationError('authorizationServerIssuerOverride must not include embedded credentials')
+  }
+  if (parsed.search) {
+    throw new McpValidationError('authorizationServerIssuerOverride must not include a query string')
+  }
+  if (parsed.hash) {
+    throw new McpValidationError('authorizationServerIssuerOverride must not include a fragment')
+  }
+
+  const normalizedPathname = parsed.pathname.replace(/\/+$/, '').toLowerCase() || '/'
+  if (INVALID_ISSUER_OVERRIDE_PATH_SUFFIXES.some((suffix) => normalizedPathname.endsWith(suffix))) {
+    throw new McpValidationError(
+      'authorizationServerIssuerOverride must be an issuer URL, not an authorization, token, or well-known metadata endpoint'
+    )
+  }
+
+  return trimmed
+}
+
 export const buildExternalUrlWithSecretQueryParams = (
   baseUrl: string,
   secretValues: Record<string, string>
@@ -635,6 +680,15 @@ export const buildAuthorizationServerMetadataCandidates = (issuerUrl: URL): stri
     new URL(`${issuerUrl.pathname.replace(/\/+$/, '')}/.well-known/openid-configuration`, issuerUrl.origin).toString()
   ]
 }
+
+const resolveRecommendedRegistrationMode = (
+  authorizationServers: DiscoveredAuthorizationServer[]
+): 'cimd' | 'dcr' | 'manual' =>
+  authorizationServers.some((server) => server.clientIdMetadataDocumentSupported === true)
+    ? 'cimd'
+    : authorizationServers.some((server) => typeof server.registrationEndpoint === 'string')
+      ? 'dcr'
+      : 'manual'
 
 const buildRequestInit = (headers?: Record<string, string>): RequestInit | undefined => {
   if (!headers) {
@@ -862,6 +916,33 @@ export class MCPService implements Resource {
     return document
   }
 
+  private async probeExternalMcpChallenge(
+    serverUrl: URL,
+    discoveryDeadlineMs: number
+  ): Promise<{ challengedScopes?: string[]; resourceMetadataUrlFromChallenge?: string }> {
+    try {
+      const probeResponse = await this.fetchDiscoveryResponse(serverUrl.toString(), discoveryDeadlineMs)
+      if (probeResponse.status !== 401) {
+        return {}
+      }
+
+      const parsedHeader = parseWwwAuthenticateHeader(probeResponse.headers.get('www-authenticate'))
+      return {
+        ...(parsedHeader.challengedScopes ? { challengedScopes: parsedHeader.challengedScopes } : {}),
+        ...(parsedHeader.resourceMetadataUrl
+          ? { resourceMetadataUrlFromChallenge: parsedHeader.resourceMetadataUrl }
+          : {})
+      }
+    } catch (error) {
+      log({
+        level: 'warn',
+        msg: `Unauthenticated external MCP discovery probe failed for ${serverUrl.toString()}; continuing with fallback behavior`,
+        error
+      })
+      return {}
+    }
+  }
+
   private resolveProtectedResourceUri(metadata: Record<string, unknown>, transportUrl: string): string {
     return typeof metadata.resource === 'string'
       ? metadata.resource
@@ -879,23 +960,10 @@ export class MCPService implements Resource {
     attemptedUrls: string[]
   }> {
     const attemptedUrls: string[] = []
-    let challengedScopes: string[] | undefined
-    let resourceMetadataUrlFromChallenge: string | undefined
-
-    try {
-      const probeResponse = await this.fetchDiscoveryResponse(serverUrl.toString(), discoveryDeadlineMs)
-      if (probeResponse.status === 401) {
-        const parsedHeader = parseWwwAuthenticateHeader(probeResponse.headers.get('www-authenticate'))
-        challengedScopes = parsedHeader.challengedScopes
-        resourceMetadataUrlFromChallenge = parsedHeader.resourceMetadataUrl
-      }
-    } catch (error) {
-      log({
-        level: 'warn',
-        msg: `Unauthenticated external MCP discovery probe failed for ${serverUrl.toString()}; continuing with RFC 9728 fallback`,
-        error
-      })
-    }
+    const { challengedScopes, resourceMetadataUrlFromChallenge } = await this.probeExternalMcpChallenge(
+      serverUrl,
+      discoveryDeadlineMs
+    )
 
     const candidateUrls = [
       ...(resourceMetadataUrlFromChallenge ? [resourceMetadataUrlFromChallenge] : []),
@@ -1032,6 +1100,55 @@ export class MCPService implements Resource {
     })
   }
 
+  private async discoverExternalAuthorizationFromIssuerOverride(input: {
+    serverUrl: URL
+    authorizationServerIssuerOverride: string
+    discoveryDeadlineMs: number
+  }): Promise<DiscoverExternalAuthorizationResult> {
+    const { challengedScopes } = await this.probeExternalMcpChallenge(input.serverUrl, input.discoveryDeadlineMs)
+    const resourceUri = canonicalizeExternalOAuthResourceUri(input.serverUrl.toString())
+    const attemptedIssuerMetadataUrls: string[] = []
+
+    const { documents, attemptedUrls } = await this.discoverAuthorizationServerMetadata(
+      input.authorizationServerIssuerOverride,
+      input.discoveryDeadlineMs
+    )
+    attemptedIssuerMetadataUrls.push(...attemptedUrls)
+
+    const primaryDocument = selectPrimaryAuthorizationServerMetadataDocument(documents)
+    if (!primaryDocument) {
+      throw new McpDiscoveryFailedError(
+        'Unable to discover a usable authorization server for the external MCP server',
+        [input.serverUrl.toString(), ...attemptedIssuerMetadataUrls],
+        `Issuer ${input.authorizationServerIssuerOverride} does not advertise PKCE ${REQUIRED_PKCE_CHALLENGE_METHOD}`
+      )
+    }
+
+    const compatibilityDocuments = await this.discoverCompatibilityAuthorizationMetadata(
+      resourceUri,
+      input.authorizationServerIssuerOverride,
+      input.discoveryDeadlineMs
+    )
+
+    const authorizationServers = [
+      this.buildMergedAuthorizationServer(
+        input.authorizationServerIssuerOverride,
+        undefined,
+        documents,
+        compatibilityDocuments
+      )
+    ]
+
+    return {
+      serverUrl: input.serverUrl.toString(),
+      resourceUri,
+      discoverySource: 'issuer_override',
+      ...(challengedScopes && challengedScopes.length > 0 ? { challengedScopes } : {}),
+      authorizationServers,
+      recommendedRegistrationMode: resolveRecommendedRegistrationMode(authorizationServers)
+    }
+  }
+
   public async discoverExternalAuthorization(
     input: DiscoverExternalAuthorizationInput
   ): Promise<DiscoverExternalAuthorizationResult> {
@@ -1042,6 +1159,17 @@ export class MCPService implements Resource {
     const sanitizedInputUrl = buildExtractedExternalUrlSecretMetadata(input.url, undefined).sanitizedUrl
     const serverUrl = await validateExternalMcpUrl(sanitizedInputUrl)
     const discoveryDeadlineMs = Date.now() + DISCOVERY_TOTAL_BUDGET_MS
+
+    if (input.authorizationServerIssuerOverride) {
+      const normalizedIssuerOverride = normalizeAuthorizationServerIssuerOverride(input.authorizationServerIssuerOverride)
+      await validateExternalMcpUrl(normalizedIssuerOverride)
+      return this.discoverExternalAuthorizationFromIssuerOverride({
+        serverUrl,
+        authorizationServerIssuerOverride: normalizedIssuerOverride,
+        discoveryDeadlineMs
+      })
+    }
+
     const { resourceMetadataUrl, resourceUri, challengedScopes, metadata } = await this.discoverProtectedResourceMetadata(
       serverUrl,
       discoveryDeadlineMs
@@ -1104,13 +1232,10 @@ export class MCPService implements Resource {
       serverUrl: serverUrl.toString(),
       resourceMetadataUrl,
       resourceUri,
+      discoverySource: 'prm',
       ...(challengedScopes && challengedScopes.length > 0 ? { challengedScopes } : {}),
       authorizationServers: discoveredAuthorizationServers,
-      recommendedRegistrationMode: discoveredAuthorizationServers.some((server) => server.clientIdMetadataDocumentSupported === true)
-        ? 'cimd'
-        : discoveredAuthorizationServers.some((server) => typeof server.registrationEndpoint === 'string')
-          ? 'dcr'
-          : 'manual'
+      recommendedRegistrationMode: resolveRecommendedRegistrationMode(discoveredAuthorizationServers)
     }
   }
 
@@ -1287,6 +1412,7 @@ export class MCPService implements Resource {
     const resourceUri = await this.resolveAuthoritativeResourceUri(
       server.url,
       server.oauthTemplate.discoveryMode,
+      server.oauthTemplate.discoverySource,
       server.oauthTemplate.resourceMetadataUrl
     )
     const persistedOauthTemplate: McpExternalOAuthTemplate = {
@@ -1320,6 +1446,9 @@ export class MCPService implements Resource {
 
     return {
       ...server.oauthTemplate,
+      ...(server.oauthTemplate.discoveryMode === 'auto' && !server.oauthTemplate.discoverySource
+        ? { discoverySource: 'prm' as const }
+        : {}),
       resourceUri:
         server.oauthTemplate.resourceUri ?? canonicalizeExternalOAuthResourceUri(server.url)
     }
@@ -1462,13 +1591,19 @@ export class MCPService implements Resource {
   private async resolveAuthoritativeResourceUri(
     transportUrl: string,
     discoveryMode: McpExternalOAuthTemplate['discoveryMode'],
+    discoverySource?: McpExternalOAuthDiscoverySource,
     resourceMetadataUrl?: string
   ): Promise<string> {
     if (discoveryMode !== 'auto') {
       return canonicalizeExternalOAuthResourceUri(transportUrl)
     }
+
+    const normalizedDiscoverySource = discoverySource ?? 'prm'
+    if (normalizedDiscoverySource === 'issuer_override') {
+      return canonicalizeExternalOAuthResourceUri(transportUrl)
+    }
     if (!resourceMetadataUrl) {
-      throw new McpValidationError('oauthTemplate.resourceMetadataUrl is required in discovery mode')
+      throw new McpValidationError('oauthTemplate.resourceMetadataUrl is required for PRM-backed discovery mode')
     }
 
     const discoveryDeadlineMs = Date.now() + DISCOVERY_TOTAL_BUDGET_MS
@@ -1505,13 +1640,34 @@ export class MCPService implements Resource {
     }
 
     if (oauthTemplate.discoveryMode === 'auto') {
+      const normalizedDiscoverySource = oauthTemplate.discoverySource ?? 'prm'
       this.assertAbsoluteUrl(
         oauthTemplate.authorizationServerMetadataUrl,
         'oauthTemplate.authorizationServerMetadataUrl'
       )
-      this.assertAbsoluteUrl(oauthTemplate.resourceMetadataUrl, 'oauthTemplate.resourceMetadataUrl')
+      this.assertAbsoluteHttpsUrl(oauthTemplate.authorizationServerIssuer, 'oauthTemplate.authorizationServerIssuer')
       if (!oauthTemplate.authorizationServerIssuer.trim()) {
         throw new McpValidationError('oauthTemplate.authorizationServerIssuer is required in discovery mode')
+      }
+      if (normalizedDiscoverySource === 'prm') {
+        if (!oauthTemplate.resourceMetadataUrl) {
+          throw new McpValidationError('oauthTemplate.resourceMetadataUrl is required for PRM-backed discovery mode')
+        }
+        this.assertAbsoluteUrl(oauthTemplate.resourceMetadataUrl, 'oauthTemplate.resourceMetadataUrl')
+      } else if (normalizedDiscoverySource === 'issuer_override') {
+        if (oauthTemplate.resourceMetadataUrl) {
+          throw new McpValidationError('oauthTemplate.resourceMetadataUrl must be omitted for issuer-override discovery mode')
+        }
+        if (!transportUrl) {
+          throw new McpValidationError('External OAuth transport url is required for issuer-override mode validation')
+        }
+        if (oauthTemplate.resourceUri !== canonicalizeExternalOAuthResourceUri(transportUrl)) {
+          throw new McpValidationError(
+            'oauthTemplate.resourceUri must equal the canonicalized transport url in issuer-override discovery mode'
+          )
+        }
+      } else {
+        throw new McpValidationError('oauthTemplate.discoverySource must be prm or issuer_override in discovery mode')
       }
       if (
         oauthTemplate.registrationMode === 'dcr' &&
@@ -1530,6 +1686,9 @@ export class MCPService implements Resource {
     } else {
       this.assertAbsoluteHttpsUrl(oauthTemplate.authorizationEndpoint, 'oauthTemplate.authorizationEndpoint')
       this.assertAbsoluteHttpsUrl(oauthTemplate.tokenEndpoint, 'oauthTemplate.tokenEndpoint')
+      if (oauthTemplate.discoverySource) {
+        throw new McpValidationError('oauthTemplate.discoverySource must be omitted in manual mode')
+      }
       if (oauthTemplate.registrationMode !== 'manual') {
         throw new McpValidationError('Manual OAuth template mode must use manual registration mode')
       }
@@ -1568,21 +1727,38 @@ export class MCPService implements Resource {
     }
 
     if (oauthTemplate.discoveryMode === 'auto') {
+      const normalizedDiscoverySource = oauthTemplate.discoverySource ?? 'prm'
       this.assertAbsoluteUrl(
         oauthTemplate.authorizationServerMetadataUrl,
         'oauthTemplate.authorizationServerMetadataUrl'
       )
-      this.assertAbsoluteUrl(oauthTemplate.resourceMetadataUrl, 'oauthTemplate.resourceMetadataUrl')
+      this.assertAbsoluteHttpsUrl(oauthTemplate.authorizationServerIssuer, 'oauthTemplate.authorizationServerIssuer')
       if (!oauthTemplate.authorizationServerIssuer.trim()) {
         throw new McpValidationError('oauthTemplate.authorizationServerIssuer is required in discovery mode')
+      }
+      if (normalizedDiscoverySource === 'prm') {
+        if (!oauthTemplate.resourceMetadataUrl) {
+          throw new McpValidationError('oauthTemplate.resourceMetadataUrl is required for PRM-backed discovery mode')
+        }
+        this.assertAbsoluteUrl(oauthTemplate.resourceMetadataUrl, 'oauthTemplate.resourceMetadataUrl')
+      } else if (normalizedDiscoverySource === 'issuer_override') {
+        if (oauthTemplate.resourceMetadataUrl) {
+          throw new McpValidationError('oauthTemplate.resourceMetadataUrl must be omitted for issuer-override discovery mode')
+        }
+      } else {
+        throw new McpValidationError('oauthTemplate.discoverySource must be prm or issuer_override in discovery mode')
       }
     }
 
     const normalizedTemplate: McpExternalOAuthTemplate = {
       ...oauthTemplate,
+      ...(oauthTemplate.discoveryMode === 'auto' && !oauthTemplate.discoverySource
+        ? { discoverySource: 'prm' as const }
+        : {}),
       resourceUri: await this.resolveAuthoritativeResourceUri(
         transportUrl,
         oauthTemplate.discoveryMode,
+        oauthTemplate.discoverySource,
         oauthTemplate.resourceMetadataUrl
       )
     }

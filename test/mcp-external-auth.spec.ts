@@ -1,5 +1,6 @@
 import { requireUsername } from '../src/controllers/mcp'
 import {
+  MCPService,
   resolveUserConnectionTeardownPolicy,
   assertTransportConfigCompatible,
   buildAuthorizationServerMetadataCandidates,
@@ -7,10 +8,12 @@ import {
   buildProtectedResourceMetadataCandidates,
   buildExternalUrlWithSecretQueryParams,
   canonicalizeExternalOAuthResourceUri,
+  normalizeAuthorizationServerIssuerOverride,
   parseWwwAuthenticateHeader,
   shouldFallbackToSse
 } from '../src/services/mcp'
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import dns from 'dns/promises'
 import {
   McpServerAlreadyExistsError,
   McpReauthRequiredError,
@@ -75,6 +78,30 @@ describe('external MCP request validation', () => {
     expect(
       canonicalizeExternalOAuthResourceUri('https://example.com/public/mcp?token=123#fragment')
     ).toBe('https://example.com/public/mcp')
+  })
+
+  test('normalizes valid issuer override URLs and preserves pathful issuers', () => {
+    expect(normalizeAuthorizationServerIssuerOverride('  https://auth.example.com/oauth2/default  ')).toBe(
+      'https://auth.example.com/oauth2/default'
+    )
+  })
+
+  test('rejects malformed issuer override values', () => {
+    expect(() => normalizeAuthorizationServerIssuerOverride('auth.example.com')).toThrow(
+      'authorizationServerIssuerOverride must be a valid absolute HTTPS URL'
+    )
+    expect(() => normalizeAuthorizationServerIssuerOverride('http://auth.example.com')).toThrow(
+      'authorizationServerIssuerOverride must use https'
+    )
+    expect(() => normalizeAuthorizationServerIssuerOverride('https://auth.example.com?foo=bar')).toThrow(
+      'authorizationServerIssuerOverride must not include a query string'
+    )
+    expect(() => normalizeAuthorizationServerIssuerOverride('https://user:pass@auth.example.com')).toThrow(
+      'authorizationServerIssuerOverride must not include embedded credentials'
+    )
+    expect(() => normalizeAuthorizationServerIssuerOverride('https://auth.example.com/authorize')).toThrow(
+      'authorizationServerIssuerOverride must be an issuer URL, not an authorization, token, or well-known metadata endpoint'
+    )
   })
 
   test('applies external user secrets as query params without mutating the shared base url', () => {
@@ -318,5 +345,158 @@ describe('external MCP teardown policy', () => {
     expect(resolveInitialUserInstallAuthState(undefined, 'oauth2')).toBe('not_connected')
     expect(resolveInitialUserInstallAuthState(undefined, 'none')).toBe('not_required')
     expect(resolveInitialUserInstallAuthState('connected', 'oauth2')).toBe('connected')
+  })
+})
+
+describe('external MCP issuer-override discovery', () => {
+  const originalFetch = global.fetch
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+    global.fetch = originalFetch
+  })
+
+  test('discovers auth metadata from an issuer override when PRM is unavailable', async () => {
+    jest.spyOn(dns, 'lookup').mockResolvedValue([{ address: '93.184.216.34', family: 4 }] as never)
+
+    global.fetch = jest.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+
+      if (url === 'https://mcp.example.com/v1/mcp') {
+        return new Response(
+          JSON.stringify({ error: 'invalid_token' }),
+          {
+            status: 401,
+            headers: {
+              'content-type': 'application/json',
+              'www-authenticate': 'Bearer scope="files:read files:write"'
+            }
+          }
+        )
+      }
+
+      if (url === 'https://auth.example.com/.well-known/oauth-authorization-server') {
+        return new Response(
+          JSON.stringify({
+            issuer: 'https://auth.example.com',
+            authorization_endpoint: 'https://auth.example.com/authorize',
+            token_endpoint: 'https://auth.example.com/oauth/token',
+            code_challenge_methods_supported: ['S256']
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          }
+        )
+      }
+
+      if (url === 'https://auth.example.com/.well-known/openid-configuration') {
+        return new Response(
+          JSON.stringify({
+            issuer: 'https://auth.example.com',
+            registration_endpoint: 'https://auth.example.com/register',
+            token_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post']
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          }
+        )
+      }
+
+      return new Response('Not Found', { status: 404 })
+    }) as typeof global.fetch
+
+    const service = new MCPService({
+      mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' },
+      secretsService: {} as never,
+      userServerInstalls: {} as never
+    })
+
+    const result = await service.discoverExternalAuthorization({
+      url: 'https://mcp.example.com/v1/mcp',
+      authorizationServerIssuerOverride: 'https://auth.example.com'
+    })
+
+    expect(result).toMatchObject({
+      serverUrl: 'https://mcp.example.com/v1/mcp',
+      resourceUri: 'https://mcp.example.com/v1/mcp',
+      discoverySource: 'issuer_override',
+      challengedScopes: ['files:read', 'files:write'],
+      authorizationServers: [
+        {
+          issuer: 'https://auth.example.com',
+          authorizationServerMetadataUrl: 'https://auth.example.com/.well-known/oauth-authorization-server',
+          authorizationEndpoint: 'https://auth.example.com/authorize',
+          tokenEndpoint: 'https://auth.example.com/oauth/token',
+          codeChallengeMethodsSupported: ['S256'],
+          registrationEndpoint: 'https://auth.example.com/register',
+          tokenEndpointAuthMethodsSupported: ['client_secret_basic']
+        }
+      ],
+      recommendedRegistrationMode: 'dcr'
+    })
+  })
+
+  test('normalizes legacy discovery-backed templates to PRM mode at runtime', () => {
+    const service = new MCPService({
+      mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' },
+      secretsService: {} as never,
+      userServerInstalls: {} as never
+    })
+
+    const normalized = (service as any).normalizeExternalOAuthTemplateForRuntime({
+      name: 'remote-drive',
+      source: 'external',
+      authMode: 'oauth2',
+      transportType: 'streamable_http',
+      url: 'https://mcp.example.com/v1/mcp?token=123',
+      status: 'disconnected',
+      enabled: true,
+      oauthTemplate: {
+        authorizationServerIssuer: 'https://auth.example.com',
+        authorizationServerMetadataUrl: 'https://auth.example.com/.well-known/oauth-authorization-server',
+        resourceMetadataUrl: 'https://mcp.example.com/.well-known/oauth-protected-resource/v1/mcp',
+        authorizationEndpoint: 'https://auth.example.com/authorize',
+        tokenEndpoint: 'https://auth.example.com/oauth/token',
+        codeChallengeMethodsSupported: ['S256'],
+        pkceRequired: true,
+        discoveryMode: 'auto',
+        registrationMode: 'manual'
+      }
+    })
+
+    expect(normalized).toMatchObject({
+      discoverySource: 'prm',
+      resourceUri: 'https://mcp.example.com/v1/mcp'
+    })
+  })
+
+  test('rejects issuer-override templates that carry a PRM resource metadata url', () => {
+    const service = new MCPService({
+      mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' },
+      secretsService: {} as never,
+      userServerInstalls: {} as never
+    })
+
+    expect(() =>
+      (service as any).validateExternalOAuthTemplate(
+        'oauth2',
+        {
+          authorizationServerIssuer: 'https://auth.example.com',
+          authorizationServerMetadataUrl: 'https://auth.example.com/.well-known/oauth-authorization-server',
+          resourceMetadataUrl: 'https://mcp.example.com/.well-known/oauth-protected-resource/v1/mcp',
+          resourceUri: 'https://mcp.example.com/v1/mcp',
+          authorizationEndpoint: 'https://auth.example.com/authorize',
+          tokenEndpoint: 'https://auth.example.com/oauth/token',
+          codeChallengeMethodsSupported: ['S256'],
+          pkceRequired: true,
+          discoveryMode: 'auto',
+          discoverySource: 'issuer_override',
+          registrationMode: 'manual'
+        },
+        'https://mcp.example.com/v1/mcp'
+      )
+    ).toThrow('oauthTemplate.resourceMetadataUrl must be omitted for issuer-override discovery mode')
   })
 })
