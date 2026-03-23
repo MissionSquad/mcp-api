@@ -10,6 +10,7 @@ import {
   canonicalizeExternalOAuthResourceUri,
   normalizeAuthorizationServerIssuerOverride,
   parseWwwAuthenticateHeader,
+  resolveCompatibilityFallbackExternalOAuthResourceUri,
   shouldFallbackToSse
 } from '../src/services/mcp'
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -23,6 +24,8 @@ import {
 import { McpOAuthClientProvider, McpOAuthTokens } from '../src/services/oauthTokens'
 import { resolveInitialUserInstallAuthState } from '../src/services/userServerInstalls'
 import { resolvePreferredTokenEndpointAuthMethod } from '../src/services/dcrClients'
+
+const originalFetch = global.fetch
 
 describe('external MCP request validation', () => {
   test('requireUsername trims and returns non-empty usernames', () => {
@@ -78,6 +81,15 @@ describe('external MCP request validation', () => {
     expect(
       canonicalizeExternalOAuthResourceUri('https://example.com/public/mcp?token=123#fragment')
     ).toBe('https://example.com/public/mcp')
+  })
+
+  test('applies compatibility fallback resource URIs when transport and oauth resource differ', () => {
+    expect(resolveCompatibilityFallbackExternalOAuthResourceUri('https://mcp.webflow.com/mcp')).toBe(
+      'https://mcp.webflow.com/sse'
+    )
+    expect(resolveCompatibilityFallbackExternalOAuthResourceUri('https://mcp.example.com/v1/mcp?token=123')).toBe(
+      'https://mcp.example.com/v1/mcp'
+    )
   })
 
   test('normalizes valid issuer override URLs and preserves pathful issuers', () => {
@@ -289,6 +301,215 @@ describe('external MCP error contract', () => {
     })
   })
 
+  test('oauth provider suppresses SDK-owned refresh by omitting refresh token from returned snapshots', async () => {
+    const noSecretRecord = {
+      serverName: 'webflow',
+      username: 'alice',
+      tokenType: 'Bearer',
+      accessToken: 'access-none',
+      refreshToken: 'refresh-none',
+      clientId: 'client-id-none',
+      redirectUri: 'https://missionsquad.example/callback',
+      tokenEndpointAuthMethod: 'none' as const,
+      registrationMode: 'dcr' as const,
+      createdAt: new Date('2026-03-23T00:00:00.000Z'),
+      updatedAt: new Date('2026-03-23T00:00:00.000Z')
+    }
+    const noSecretTokenStore = {
+      getTokenRecord: jest.fn().mockResolvedValue(noSecretRecord)
+    } as unknown as McpOAuthTokens
+
+    const noSecretProvider = new McpOAuthClientProvider({
+      serverName: 'webflow',
+      username: 'alice',
+      tokenStore: noSecretTokenStore,
+      record: noSecretRecord,
+      tokenEndpoint: 'https://example.com/oauth/token'
+    })
+
+    const clientSecretRecord = {
+      serverName: 'remote-shopify',
+      username: 'alice',
+      tokenType: 'Bearer',
+      accessToken: 'access-post',
+      refreshToken: 'refresh-post',
+      clientId: 'client-id-post',
+      clientSecret: 'client-secret-post',
+      redirectUri: 'https://missionsquad.example/callback',
+      tokenEndpointAuthMethod: 'client_secret_post' as const,
+      registrationMode: 'manual' as const,
+      createdAt: new Date('2026-03-23T00:00:00.000Z'),
+      updatedAt: new Date('2026-03-23T00:00:00.000Z')
+    }
+    const clientSecretTokenStore = {
+      getTokenRecord: jest.fn().mockResolvedValue(clientSecretRecord)
+    } as unknown as McpOAuthTokens
+
+    const clientSecretProvider = new McpOAuthClientProvider({
+      serverName: 'remote-shopify',
+      username: 'alice',
+      tokenStore: clientSecretTokenStore,
+      record: clientSecretRecord,
+      tokenEndpoint: 'https://example.com/oauth/token'
+    })
+
+    await expect(noSecretProvider.tokens()).resolves.toMatchObject({
+      access_token: 'access-none',
+      refresh_token: undefined
+    })
+
+    await expect(clientSecretProvider.tokens()).resolves.toMatchObject({
+      access_token: 'access-post',
+      refresh_token: undefined
+    })
+  })
+
+  test('oauth provider validates resource url using the configured compatibility resource', async () => {
+    const provider = new McpOAuthClientProvider({
+      serverName: 'webflow',
+      username: 'alice',
+      tokenStore: {} as McpOAuthTokens,
+      record: {
+        serverName: 'webflow',
+        username: 'alice',
+        tokenType: 'Bearer',
+        accessToken: 'access',
+        refreshToken: 'refresh',
+        clientId: 'client-id',
+        redirectUri: 'https://missionsquad.example/callback',
+        tokenEndpointAuthMethod: 'none',
+        registrationMode: 'dcr',
+        createdAt: new Date('2026-03-23T00:00:00.000Z'),
+        updatedAt: new Date('2026-03-23T00:00:00.000Z')
+      },
+      tokenEndpoint: 'https://mcp.webflow.com/oauth/token',
+      resource: 'https://mcp.webflow.com/sse'
+    })
+
+    await expect(provider.validateResourceURL(new URL('https://mcp.webflow.com/mcp'))).resolves.toEqual(
+      new URL('https://mcp.webflow.com/sse')
+    )
+  })
+
+  test('oauth token refresh is single-flight per server and user', async () => {
+    global.fetch = jest.fn(async () =>
+      new Response(
+        JSON.stringify({
+          access_token: 'fresh-access',
+          refresh_token: 'fresh-refresh',
+          token_type: 'Bearer',
+          expires_in: 3600
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        }
+      )
+    ) as typeof global.fetch
+
+    const tokenStore = new McpOAuthTokens({
+      mongoParams: {
+        host: 'localhost:27017',
+        db: 'test',
+        user: 'user',
+        pass: 'pass'
+      }
+    })
+
+    const expiredRecord = {
+      serverName: 'webflow',
+      username: 'alice',
+      tokenType: 'Bearer',
+      accessToken: 'expired-access',
+      refreshToken: 'stale-refresh',
+      clientId: 'client-id',
+      redirectUri: 'https://missionsquad.example/callback',
+      tokenEndpointAuthMethod: 'none' as const,
+      registrationMode: 'dcr' as const,
+      expiresAt: new Date(Date.now() - 60_000),
+      createdAt: new Date('2026-03-23T00:00:00.000Z'),
+      updatedAt: new Date('2026-03-23T00:00:00.000Z')
+    }
+    const refreshedRecord = {
+      ...expiredRecord,
+      accessToken: 'fresh-access',
+      refreshToken: 'fresh-refresh',
+      expiresAt: new Date(Date.now() + 3_600_000),
+      updatedAt: new Date('2026-03-23T01:00:00.000Z')
+    }
+
+    jest
+      .spyOn(tokenStore, 'getTokenRecord')
+      .mockResolvedValueOnce(expiredRecord)
+      .mockResolvedValueOnce(refreshedRecord)
+    jest.spyOn(tokenStore, 'saveTokens').mockResolvedValue()
+
+    const input = {
+      serverName: 'webflow',
+      username: 'alice',
+      tokenEndpoint: 'https://mcp.webflow.com/oauth/token',
+      resource: 'https://mcp.webflow.com/mcp'
+    }
+
+    const [first, second] = await Promise.all([
+      tokenStore.refreshTokenRecord(input),
+      tokenStore.refreshTokenRecord(input)
+    ])
+
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    expect(first).toEqual(refreshedRecord)
+    expect(second).toEqual(refreshedRecord)
+  })
+
+  test('user connection establishment is single-flight per server and user', async () => {
+    const service = new MCPService({
+      mongoParams: {
+        host: 'localhost:27017',
+        db: 'test',
+        user: 'user',
+        pass: 'pass'
+      },
+      secretsService: {} as never,
+      userServerInstalls: {} as never
+    })
+
+    const server = {
+      name: 'webflow',
+      transportType: 'streamable_http',
+      url: 'https://mcp.webflow.com/mcp',
+      status: 'disconnected',
+      enabled: true
+    } as any
+
+    let resolveConnection!: (value: any) => void
+    const connection = new Promise<any>((resolve) => {
+      resolveConnection = resolve
+    })
+
+    const internalSpy = jest.spyOn(service as any, 'connectUserToServerInternal').mockReturnValue(connection)
+
+    const firstAttempt = service.connectUserToServer('alice', server)
+    const secondAttempt = service.connectUserToServer('alice', server)
+
+    expect(internalSpy).toHaveBeenCalledTimes(1)
+
+    const resolvedConnection = {
+      username: 'alice',
+      serverName: 'webflow',
+      client: {} as any,
+      transport: {} as any,
+      status: 'connected',
+      logs: []
+    }
+    resolveConnection(resolvedConnection)
+
+    await expect(Promise.all([firstAttempt, secondAttempt])).resolves.toEqual([
+      resolvedConnection,
+      resolvedConnection
+    ])
+    expect((service as any).userConnectionInFlight.size).toBe(0)
+  })
+
   test('duplicate shared external servers serialize to the handbook 409 contract', () => {
     const existingServer = {
       name: 'remote-drive',
@@ -349,8 +570,6 @@ describe('external MCP teardown policy', () => {
 })
 
 describe('external MCP issuer-override discovery', () => {
-  const originalFetch = global.fetch
-
   afterEach(() => {
     jest.restoreAllMocks()
     global.fetch = originalFetch
@@ -470,6 +689,100 @@ describe('external MCP issuer-override discovery', () => {
       discoverySource: 'prm',
       resourceUri: 'https://mcp.example.com/v1/mcp'
     })
+  })
+
+  test('runtime normalization applies compatibility fallback resource uri for issuer-override records', () => {
+    const service = new MCPService({
+      mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' },
+      secretsService: {} as never,
+      userServerInstalls: {} as never
+    })
+
+    const normalized = (service as any).normalizeExternalOAuthTemplateForRuntime({
+      name: 'webflow',
+      source: 'external',
+      authMode: 'oauth2',
+      transportType: 'streamable_http',
+      url: 'https://mcp.webflow.com/mcp',
+      status: 'disconnected',
+      enabled: true,
+      oauthTemplate: {
+        authorizationServerIssuer: 'https://mcp.webflow.com',
+        authorizationServerMetadataUrl: 'https://mcp.webflow.com/.well-known/oauth-authorization-server',
+        authorizationEndpoint: 'https://mcp.webflow.com/oauth/authorize',
+        tokenEndpoint: 'https://mcp.webflow.com/oauth/token',
+        codeChallengeMethodsSupported: ['S256'],
+        pkceRequired: true,
+        discoveryMode: 'auto',
+        discoverySource: 'issuer_override',
+        registrationMode: 'dcr',
+        registrationEndpoint: 'https://mcp.webflow.com/oauth/register',
+        tokenEndpointAuthMethodsSupported: ['none'],
+        resourceUri: 'https://mcp.webflow.com/mcp'
+      }
+    })
+
+    expect(normalized).toMatchObject({
+      discoverySource: 'issuer_override',
+      resourceUri: 'https://mcp.webflow.com/sse'
+    })
+  })
+
+  test('resource uri backfill invalidates stale oauth runtime state when the authoritative resource changes', async () => {
+    const service = new MCPService({
+      mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' },
+      secretsService: {} as never,
+      userServerInstalls: {
+        listInstallsForServer: jest.fn().mockResolvedValue([{ serverName: 'webflow', username: 'alice' }]),
+        setAuthState: jest.fn().mockResolvedValue(undefined)
+      } as never
+    })
+
+    ;(service as any).oauthTokensService = {
+      deleteTokensByServer: jest.fn().mockResolvedValue(undefined)
+    }
+    ;(service as any).userSessionsService = {
+      deleteSessionsByServer: jest.fn().mockResolvedValue(undefined)
+    }
+    ;(service as any).mcpDBClient = {
+      update: jest.fn().mockResolvedValue(undefined)
+    }
+
+    await (service as any).backfillExternalOAuthResourceUri({
+      name: 'webflow',
+      source: 'external',
+      authMode: 'oauth2',
+      transportType: 'streamable_http',
+      url: 'https://mcp.webflow.com/mcp',
+      status: 'disconnected',
+      enabled: true,
+      oauthTemplate: {
+        authorizationServerIssuer: 'https://mcp.webflow.com',
+        authorizationServerMetadataUrl: 'https://mcp.webflow.com/.well-known/oauth-authorization-server',
+        authorizationEndpoint: 'https://mcp.webflow.com/oauth/authorize',
+        tokenEndpoint: 'https://mcp.webflow.com/oauth/token',
+        codeChallengeMethodsSupported: ['S256'],
+        pkceRequired: true,
+        discoveryMode: 'auto',
+        discoverySource: 'issuer_override',
+        registrationMode: 'dcr',
+        registrationEndpoint: 'https://mcp.webflow.com/oauth/register',
+        tokenEndpointAuthMethodsSupported: ['none'],
+        resourceUri: 'https://mcp.webflow.com/mcp'
+      }
+    })
+
+    expect((service as any).mcpDBClient.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        oauthTemplate: expect.objectContaining({
+          resourceUri: 'https://mcp.webflow.com/sse'
+        })
+      }),
+      { name: 'webflow' }
+    )
+    expect((service as any).oauthTokensService.deleteTokensByServer).toHaveBeenCalledWith('webflow')
+    expect((service as any).userSessionsService.deleteSessionsByServer).toHaveBeenCalledWith('webflow')
+    expect((service as any).userServerInstalls.setAuthState).toHaveBeenCalledWith('webflow', 'alice', 'not_connected')
   })
 
   test('rejects issuer-override templates that carry a PRM resource metadata url', () => {

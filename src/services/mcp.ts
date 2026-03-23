@@ -12,6 +12,7 @@ import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { CallToolResultSchema, ListToolsResultSchema } from '@modelcontextprotocol/sdk/types.js'
 import { Resource } from '..'
 import { BuiltInServer, BuiltInServerRegistry } from '../builtin-servers'
+import { env } from '../env'
 import { log, retryWithExponentialBackoff, sanitizeString } from '../utils/general'
 import { IndexDefinition, MongoConnectionParams, MongoDBClient } from '../utils/mongodb'
 import { Secrets } from './secrets'
@@ -446,6 +447,38 @@ export const canonicalizeExternalOAuthResourceUri = (input: string): string => {
   return parsed.toString()
 }
 
+type ExternalOAuthResourceCompatibilityRule = {
+  id: string
+  matchesTransportUrl: (transportUrl: URL) => boolean
+  resourceUri: (transportUrl: URL) => string
+}
+
+const EXTERNAL_OAUTH_RESOURCE_COMPATIBILITY_RULES: ExternalOAuthResourceCompatibilityRule[] = [
+  {
+    id: 'webflow_transport_resource_split',
+    matchesTransportUrl: (transportUrl) =>
+      transportUrl.origin === 'https://mcp.webflow.com' &&
+      transportUrl.pathname.replace(/\/+$/, '') === '/mcp',
+    resourceUri: () => 'https://mcp.webflow.com/sse'
+  }
+]
+
+export const resolveCompatibilityFallbackExternalOAuthResourceUri = (transportUrl: string): string => {
+  const canonicalTransportResourceUri = canonicalizeExternalOAuthResourceUri(transportUrl)
+  const parsedTransportUrl = new URL(canonicalTransportResourceUri)
+  const rule = EXTERNAL_OAUTH_RESOURCE_COMPATIBILITY_RULES.find((candidate) =>
+    candidate.matchesTransportUrl(parsedTransportUrl)
+  )
+  return rule ? rule.resourceUri(parsedTransportUrl) : canonicalTransportResourceUri
+}
+
+const oauthLogInfo = (msg: string): void => {
+  if (!env.ENABLE_OAUTH_LOGGING) {
+    return
+  }
+  log({ level: 'info', msg })
+}
+
 const INVALID_ISSUER_OVERRIDE_PATH_SUFFIXES = [
   '/authorize',
   '/authorization',
@@ -805,6 +838,7 @@ const normalizeExternalAuthError = (
 export class MCPService implements Resource {
   public servers: Record<string, MCPServer> = {}
   public userConnections: Record<UserServerKey, UserConnection> = {}
+  private userConnectionInFlight = new Map<UserServerKey, Promise<UserConnection>>()
   private list: MCPServer[] = []
   private serverKeys: string[] = []
   private resourceUriBackfillInFlight = new Map<string, Promise<void>>()
@@ -946,7 +980,7 @@ export class MCPService implements Resource {
   private resolveProtectedResourceUri(metadata: Record<string, unknown>, transportUrl: string): string {
     return typeof metadata.resource === 'string'
       ? metadata.resource
-      : canonicalizeExternalOAuthResourceUri(transportUrl)
+      : resolveCompatibilityFallbackExternalOAuthResourceUri(transportUrl)
   }
 
   private async discoverProtectedResourceMetadata(
@@ -1364,13 +1398,20 @@ export class MCPService implements Resource {
   }
 
   private shouldBackfillExternalOAuthResourceUri(server: MCPServerRecord): boolean {
+    if (
+      (server.source ?? 'platform') !== 'external' ||
+      (server.authMode ?? 'none') !== 'oauth2' ||
+      server.transportType === 'stdio' ||
+      typeof server.url !== 'string' ||
+      !server.oauthTemplate
+    ) {
+      return false
+    }
+
+    const runtimeTemplate = this.normalizeExternalOAuthTemplateForRuntime(server)
     return (
-      (server.source ?? 'platform') === 'external' &&
-      (server.authMode ?? 'none') === 'oauth2' &&
-      server.transportType !== 'stdio' &&
-      typeof server.url === 'string' &&
-      !!server.oauthTemplate &&
-      typeof server.oauthTemplate.resourceUri !== 'string'
+      typeof server.oauthTemplate.resourceUri !== 'string' ||
+      runtimeTemplate?.resourceUri !== server.oauthTemplate.resourceUri
     )
   }
 
@@ -1409,6 +1450,7 @@ export class MCPService implements Resource {
       return
     }
 
+    const previousResourceUri = server.oauthTemplate.resourceUri
     const resourceUri = await this.resolveAuthoritativeResourceUri(
       server.url,
       server.oauthTemplate.discoveryMode,
@@ -1433,7 +1475,35 @@ export class MCPService implements Resource {
       this.servers[serverKey].oauthTemplate = persistedOauthTemplate
     }
 
+    if (previousResourceUri !== resourceUri) {
+      await this.invalidateExternalOAuthRuntimeState(server.name)
+    }
+
     this.resourceUriBackfillCooldownUntil.delete(server.name)
+  }
+
+  private async invalidateExternalOAuthRuntimeState(serverName: string): Promise<void> {
+    const installs = await this.userServerInstalls.listInstallsForServer(serverName)
+
+    for (const [userKey, connection] of Object.entries(this.userConnections) as Array<[UserServerKey, UserConnection]>) {
+      if (connection.serverName !== serverName) {
+        continue
+      }
+      await this.teardownUserConnection(userKey, 'oauth_updated')
+    }
+
+    if (this.oauthTokensService) {
+      await this.oauthTokensService.deleteTokensByServer(serverName)
+    }
+    if (this.userSessionsService) {
+      await this.userSessionsService.deleteSessionsByServer(serverName)
+    }
+
+    await Promise.all(
+      installs.map((install) =>
+        this.userServerInstalls.setAuthState(serverName, install.username, 'not_connected')
+      )
+    )
   }
 
   private normalizeExternalOAuthTemplateForRuntime(server: MCPServerRecord): McpExternalOAuthTemplate | undefined {
@@ -1444,13 +1514,19 @@ export class MCPService implements Resource {
       return server.oauthTemplate
     }
 
+    const normalizedDiscoverySource = server.oauthTemplate.discoverySource ?? 'prm'
+    const compatibilityFallbackResourceUri = resolveCompatibilityFallbackExternalOAuthResourceUri(server.url)
+    const runtimeResourceUri =
+      server.oauthTemplate.discoveryMode !== 'auto' || normalizedDiscoverySource === 'issuer_override'
+        ? compatibilityFallbackResourceUri
+        : server.oauthTemplate.resourceUri ?? compatibilityFallbackResourceUri
+
     return {
       ...server.oauthTemplate,
       ...(server.oauthTemplate.discoveryMode === 'auto' && !server.oauthTemplate.discoverySource
         ? { discoverySource: 'prm' as const }
         : {}),
-      resourceUri:
-        server.oauthTemplate.resourceUri ?? canonicalizeExternalOAuthResourceUri(server.url)
+      resourceUri: runtimeResourceUri
     }
   }
 
@@ -1489,13 +1565,31 @@ export class MCPService implements Resource {
       return runtimeUrl ? { url: runtimeUrl } : {}
     }
 
+    oauthLogInfo(`[oauth:${username}:${server.name}] Building transport auth provider ${JSON.stringify({
+        transportUrl: server.url,
+        runtimeUrl,
+        resourceUri: server.oauthTemplate?.resourceUri,
+        authorizationServerIssuer: server.oauthTemplate?.authorizationServerIssuer,
+        registrationEndpoint: server.oauthTemplate?.registrationEndpoint,
+        tokenEndpoint: server.oauthTemplate?.tokenEndpoint,
+        tokenEndpointAuthMethodsSupported: server.oauthTemplate?.tokenEndpointAuthMethodsSupported,
+        persistedRecord: {
+          clientId: record.clientId ? `${record.clientId.slice(0, 4)}...${record.clientId.slice(-4)}` : undefined,
+          tokenEndpointAuthMethod: record.tokenEndpointAuthMethod,
+          registrationMode: record.registrationMode,
+          expiresAt: record.expiresAt?.toISOString(),
+          hasRefreshToken: !!record.refreshToken,
+          hasClientSecret: !!record.clientSecret
+        }
+      })}`)
+
     const authProvider = new McpOAuthClientProvider({
       serverName: server.name,
       username,
       tokenStore: this.oauthTokensService,
       record,
       tokenEndpoint: server.oauthTemplate?.tokenEndpoint ?? new URL('/token', server.url).toString(),
-      resource: server.oauthTemplate?.resourceUri ?? canonicalizeExternalOAuthResourceUri(server.url),
+      resource: server.oauthTemplate?.resourceUri ?? resolveCompatibilityFallbackExternalOAuthResourceUri(server.url),
       issuer: server.oauthTemplate?.authorizationServerIssuer,
       registrationEndpoint: server.oauthTemplate?.registrationEndpoint,
       tokenEndpointAuthMethodsSupported: server.oauthTemplate?.tokenEndpointAuthMethodsSupported,
@@ -1595,12 +1689,12 @@ export class MCPService implements Resource {
     resourceMetadataUrl?: string
   ): Promise<string> {
     if (discoveryMode !== 'auto') {
-      return canonicalizeExternalOAuthResourceUri(transportUrl)
+      return resolveCompatibilityFallbackExternalOAuthResourceUri(transportUrl)
     }
 
     const normalizedDiscoverySource = discoverySource ?? 'prm'
     if (normalizedDiscoverySource === 'issuer_override') {
-      return canonicalizeExternalOAuthResourceUri(transportUrl)
+      return resolveCompatibilityFallbackExternalOAuthResourceUri(transportUrl)
     }
     if (!resourceMetadataUrl) {
       throw new McpValidationError('oauthTemplate.resourceMetadataUrl is required for PRM-backed discovery mode')
@@ -1661,9 +1755,9 @@ export class MCPService implements Resource {
         if (!transportUrl) {
           throw new McpValidationError('External OAuth transport url is required for issuer-override mode validation')
         }
-        if (oauthTemplate.resourceUri !== canonicalizeExternalOAuthResourceUri(transportUrl)) {
+        if (oauthTemplate.resourceUri !== resolveCompatibilityFallbackExternalOAuthResourceUri(transportUrl)) {
           throw new McpValidationError(
-            'oauthTemplate.resourceUri must equal the canonicalized transport url in issuer-override discovery mode'
+            'oauthTemplate.resourceUri must equal the resolved fallback resource uri in issuer-override discovery mode'
           )
         }
       } else {
@@ -1695,8 +1789,8 @@ export class MCPService implements Resource {
       if (!transportUrl) {
         throw new McpValidationError('External OAuth transport url is required for manual mode validation')
       }
-      if (oauthTemplate.resourceUri !== canonicalizeExternalOAuthResourceUri(transportUrl)) {
-        throw new McpValidationError('oauthTemplate.resourceUri must equal the canonicalized transport url in manual mode')
+      if (oauthTemplate.resourceUri !== resolveCompatibilityFallbackExternalOAuthResourceUri(transportUrl)) {
+        throw new McpValidationError('oauthTemplate.resourceUri must equal the resolved fallback resource uri in manual mode')
       }
     }
 
@@ -2200,6 +2294,38 @@ export class MCPService implements Resource {
       throw new Error(`connectUserToServer is only for streamable_http servers, got ${server.transportType}`)
     }
 
+    const userKey = buildUserServerKey(username, server.name)
+
+    // Check if already connected
+    const existing = this.userConnections[userKey]
+    if (existing && existing.status === 'connected') {
+      return existing
+    }
+
+    const inFlight = this.userConnectionInFlight.get(userKey)
+    if (inFlight) {
+      oauthLogInfo(`[${username}:${server.name}] Connection already in flight; awaiting existing attempt.`)
+      return inFlight
+    }
+
+    const connectPromise = this.connectUserToServerInternal(username, server, allowSessionRetry).finally(() => {
+      if (this.userConnectionInFlight.get(userKey) === connectPromise) {
+        this.userConnectionInFlight.delete(userKey)
+      }
+    })
+    this.userConnectionInFlight.set(userKey, connectPromise)
+    return connectPromise
+  }
+
+  private async connectUserToServerInternal(
+    username: string,
+    server: MCPServer,
+    allowSessionRetry = true
+  ): Promise<UserConnection> {
+    if (server.transportType !== 'streamable_http') {
+      throw new Error(`connectUserToServer is only for streamable_http servers, got ${server.transportType}`)
+    }
+
     await validateExternalMcpUrl(server.url)
 
     const userKey = buildUserServerKey(username, server.name)
@@ -2286,7 +2412,7 @@ export class MCPService implements Resource {
         })
         await this.clearUserSessionId(server.name, username)
         await this.teardownUserConnection(userKey, 'session_expired')
-        return this.connectUserToServer(username, server, false)
+        return this.connectUserToServerInternal(username, server, false)
       }
 
       // Fallback to SSE
@@ -3288,6 +3414,12 @@ export class MCPService implements Resource {
       }
     }
 
+    const resourceUriChanged =
+      (existingServer.source ?? 'platform') === 'external' &&
+      (existingServer.authMode ?? 'none') === 'oauth2' &&
+      updatedServer.transportType === 'streamable_http' &&
+      updatedServer.oauthTemplate?.resourceUri !== existingServer.oauthTemplate?.resourceUri
+
     await this.mcpDBClient.update(updatedServer, { name })
 
     // Stop existing connections and restart
@@ -3325,6 +3457,10 @@ export class MCPService implements Resource {
       // Stdio: eagerly connect shared connection
       await this.connectToServer(updatedServer)
       this.fetchToolsForServer(updatedServer)
+    }
+
+    if (resourceUriChanged) {
+      await this.invalidateExternalOAuthRuntimeState(name)
     }
 
     return updatedServer

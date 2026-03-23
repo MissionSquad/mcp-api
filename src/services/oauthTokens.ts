@@ -7,6 +7,7 @@ import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.
 import { IndexDefinition, MongoConnectionParams, MongoDBClient } from '../utils/mongodb'
 import { SecretEncryptor } from '../utils/secretEncryptor'
 import { env } from '../env'
+import { log } from '../utils/general'
 import { McpReauthRequiredError } from './mcpErrors'
 import type { McpDcrClients, SupportedTokenEndpointAuthMethod } from './dcrClients'
 
@@ -66,9 +67,52 @@ const oauthTokenIndexes: IndexDefinition[] = [
   { name: 'serverName_username', key: { serverName: 1, username: 1 }, unique: true }
 ]
 
+const truncateSensitiveValue = (value: string | undefined, visibleChars = 4): string | undefined => {
+  if (!value) {
+    return undefined
+  }
+  if (value.length <= visibleChars * 2) {
+    return `${value[0]}...${value[value.length - 1]}`
+  }
+  return `${value.slice(0, visibleChars)}...${value.slice(-visibleChars)}`
+}
+
+const summarizeUrlForLog = (value: string | undefined): string | undefined => {
+  if (!value) {
+    return undefined
+  }
+  try {
+    const parsed = new URL(value)
+    return `${parsed.origin}${parsed.pathname}`
+  } catch {
+    return value
+  }
+}
+
+const summarizeTokenRecordForLog = (record: McpOAuthTokenDecrypted | null | undefined) => ({
+  clientId: truncateSensitiveValue(record?.clientId),
+  redirectUri: summarizeUrlForLog(record?.redirectUri),
+  tokenEndpointAuthMethod: record?.tokenEndpointAuthMethod,
+  registrationMode: record?.registrationMode,
+  expiresAt: record?.expiresAt?.toISOString(),
+  scopes: record?.scopes,
+  hasAccessToken: !!record?.accessToken,
+  hasRefreshToken: !!record?.refreshToken,
+  hasClientSecret: !!record?.clientSecret,
+  hasCodeVerifier: !!record?.codeVerifier
+})
+
+const oauthLogInfo = (msg: string): void => {
+  if (!env.ENABLE_OAUTH_LOGGING) {
+    return
+  }
+  log({ level: 'info', msg })
+}
+
 export class McpOAuthTokens {
   private encryptor: SecretEncryptor
   private dbClient: MongoDBClient<McpOAuthTokenRecord>
+  private refreshInFlightByKey = new Map<string, Promise<McpOAuthTokenDecrypted>>()
 
   constructor({ mongoParams }: { mongoParams: MongoConnectionParams }) {
     this.encryptor = new SecretEncryptor(env.SECRETS_KEY)
@@ -82,16 +126,21 @@ export class McpOAuthTokens {
   public async getTokenRecord(serverName: string, username: string): Promise<McpOAuthTokenDecrypted | null> {
     const record = await this.dbClient.findOne({ serverName, username })
     if (!record) {
+      oauthLogInfo(`[oauth:${username}:${serverName}] No OAuth token record found`)
       return null
     }
 
-    return {
+    const decryptedRecord = {
       ...record,
       accessToken: this.encryptor.decrypt(record.accessToken),
       refreshToken: record.refreshToken ? this.encryptor.decrypt(record.refreshToken) : undefined,
       clientSecret: record.clientSecret ? this.encryptor.decrypt(record.clientSecret) : undefined,
       codeVerifier: record.codeVerifier ? this.encryptor.decrypt(record.codeVerifier) : undefined
     }
+
+    oauthLogInfo(`[oauth:${username}:${serverName}] Loaded OAuth token record ${JSON.stringify(summarizeTokenRecordForLog(decryptedRecord))}`)
+
+    return decryptedRecord
   }
 
   public async upsertTokenRecord(input: McpOAuthTokenInput): Promise<void> {
@@ -128,6 +177,17 @@ export class McpOAuthTokens {
     }
 
     await this.dbClient.upsert(record, { serverName: input.serverName, username: input.username })
+    oauthLogInfo(`[oauth:${input.username}:${input.serverName}] Upserted OAuth token record ${JSON.stringify({
+        clientId: truncateSensitiveValue(record.clientId),
+        redirectUri: summarizeUrlForLog(record.redirectUri),
+        tokenEndpointAuthMethod: record.tokenEndpointAuthMethod,
+        registrationMode: record.registrationMode,
+        expiresAt: record.expiresAt?.toISOString(),
+        scopes: record.scopes,
+        hasRefreshToken: !!refreshTokenValue,
+        hasClientSecret: !!record.clientSecret,
+        hasCodeVerifier: !!record.codeVerifier
+      })}`)
   }
 
   public async saveTokens(serverName: string, username: string, tokens: OAuthTokens): Promise<void> {
@@ -162,6 +222,16 @@ export class McpOAuthTokens {
     }
 
     await this.dbClient.upsert(updated, { serverName, username })
+    oauthLogInfo(`[oauth:${username}:${serverName}] Saved OAuth tokens ${JSON.stringify({
+        tokenType: updated.tokenType,
+        expiresAt: updated.expiresAt?.toISOString(),
+        scopes: updated.scopes,
+        hasRefreshToken: !!tokens.refresh_token || !!existing.refreshToken,
+        refreshTokenChanged: !!tokens.refresh_token,
+        clientId: truncateSensitiveValue(updated.clientId),
+        tokenEndpointAuthMethod: updated.tokenEndpointAuthMethod,
+        registrationMode: updated.registrationMode
+      })}`)
   }
 
   public async saveCodeVerifier(serverName: string, username: string, codeVerifier: string): Promise<void> {
@@ -176,14 +246,19 @@ export class McpOAuthTokens {
       },
       { serverName, username }
     )
+    oauthLogInfo(`[oauth:${username}:${serverName}] Saved PKCE code verifier ${JSON.stringify({
+        codeVerifier: truncateSensitiveValue(codeVerifier)
+      })}`)
   }
 
   public async deleteTokenRecord(serverName: string, username: string): Promise<void> {
     await this.dbClient.delete({ serverName, username }, false)
+    oauthLogInfo(`[oauth:${username}:${serverName}] Deleted OAuth token record`)
   }
 
   public async deleteTokensByServer(serverName: string): Promise<void> {
     await this.dbClient.delete({ serverName })
+    oauthLogInfo(`[oauth:*:${serverName}] Deleted all OAuth token records for server`)
   }
 
   public async listTokenRecordsForServer(serverName: string): Promise<McpOAuthTokenDecrypted[]> {
@@ -197,7 +272,11 @@ export class McpOAuthTokens {
     }))
   }
 
-  public async refreshTokenRecord(input: {
+  private buildRefreshKey(serverName: string, username: string): string {
+    return `${serverName}::${username}`
+  }
+
+  private async refreshTokenRecordInternal(input: {
     serverName: string
     username: string
     tokenEndpoint: string
@@ -207,6 +286,17 @@ export class McpOAuthTokens {
     if (!existing?.refreshToken) {
       throw new Error(`OAuth refresh token not found for server ${input.serverName} and user ${input.username}`)
     }
+
+    oauthLogInfo(`[oauth:${input.username}:${input.serverName}] Starting OAuth refresh ${JSON.stringify({
+        tokenEndpoint: summarizeUrlForLog(input.tokenEndpoint),
+        resource: summarizeUrlForLog(input.resource),
+        clientId: truncateSensitiveValue(existing.clientId),
+        refreshToken: truncateSensitiveValue(existing.refreshToken),
+        tokenEndpointAuthMethod: existing.tokenEndpointAuthMethod,
+        registrationMode: existing.registrationMode,
+        expiresAt: existing.expiresAt?.toISOString(),
+        scopes: existing.scopes
+      })}`)
 
     const params = new URLSearchParams({
       grant_type: 'refresh_token',
@@ -240,6 +330,12 @@ export class McpOAuthTokens {
       body: params
     })
 
+    oauthLogInfo(`[oauth:${input.username}:${input.serverName}] Refresh response received ${JSON.stringify({
+        status: response.status,
+        tokenEndpoint: summarizeUrlForLog(input.tokenEndpoint),
+        resource: summarizeUrlForLog(input.resource)
+      })}`)
+
     const responseText = await response.text()
     let parsed: OAuthTokens | { error?: string; error_description?: string }
     try {
@@ -251,6 +347,13 @@ export class McpOAuthTokens {
     if (!response.ok) {
       const errorCode = (parsed as { error?: string }).error || `HTTP_${response.status}`
       const errorDescription = (parsed as { error_description?: string }).error_description
+      oauthLogInfo(`[oauth:${input.username}:${input.serverName}] Refresh failed ${JSON.stringify({
+          status: response.status,
+          error: errorCode,
+          errorDescription,
+          tokenEndpoint: summarizeUrlForLog(input.tokenEndpoint),
+          resource: summarizeUrlForLog(input.resource)
+        })}`)
       throw new Error(`OAuth token refresh failed: ${errorCode}${errorDescription ? ` ${errorDescription}` : ''}`)
     }
 
@@ -259,7 +362,40 @@ export class McpOAuthTokens {
     if (!updated) {
       throw new Error(`OAuth token record not found after refresh for server ${input.serverName}`)
     }
+
+    oauthLogInfo(`[oauth:${input.username}:${input.serverName}] Refresh succeeded ${JSON.stringify({
+        returnedResource: typeof (parsed as Record<string, unknown>).resource === 'string'
+          ? summarizeUrlForLog((parsed as Record<string, unknown>).resource as string)
+          : undefined,
+        expiresAt: updated.expiresAt?.toISOString(),
+        hasRefreshToken: !!updated.refreshToken,
+        refreshToken: truncateSensitiveValue(updated.refreshToken),
+        tokenType: updated.tokenType,
+        scopes: updated.scopes
+      })}`)
     return updated
+  }
+
+  public async refreshTokenRecord(input: {
+    serverName: string
+    username: string
+    tokenEndpoint: string
+    resource?: string
+  }): Promise<McpOAuthTokenDecrypted> {
+    const refreshKey = this.buildRefreshKey(input.serverName, input.username)
+    const existingRefresh = this.refreshInFlightByKey.get(refreshKey)
+    if (existingRefresh) {
+      oauthLogInfo(`[oauth:${input.username}:${input.serverName}] Awaiting in-flight OAuth refresh`)
+      return existingRefresh
+    }
+
+    const refreshPromise = this.refreshTokenRecordInternal(input).finally(() => {
+      if (this.refreshInFlightByKey.get(refreshKey) === refreshPromise) {
+        this.refreshInFlightByKey.delete(refreshKey)
+      }
+    })
+    this.refreshInFlightByKey.set(refreshKey, refreshPromise)
+    return refreshPromise
   }
 
   public async stop(): Promise<void> {
@@ -353,10 +489,23 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
       refresh_token: tokens.refresh_token ?? this.tokensSnapshot.refresh_token
     }
     this.tokensSnapshot = nextTokens
+    oauthLogInfo(`[oauth:${this.username}:${this.serverName}] Provider saved token snapshot ${JSON.stringify({
+        hasAccessToken: !!nextTokens.access_token,
+        hasRefreshToken: !!nextTokens.refresh_token,
+        expiresIn: nextTokens.expires_in,
+        scope: nextTokens.scope
+      })}`)
     await this.tokenStore.saveTokens(this.serverName, this.username, nextTokens)
   }
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
+    oauthLogInfo(`[oauth:${this.username}:${this.serverName}] Redirecting to authorization ${JSON.stringify({
+        authorizationUrl: summarizeUrlForLog(authorizationUrl.toString()),
+        clientId: truncateSensitiveValue(authorizationUrl.searchParams.get('client_id') || undefined),
+        resource: summarizeUrlForLog(authorizationUrl.searchParams.get('resource') || undefined),
+        hasState: authorizationUrl.searchParams.has('state'),
+        hasCodeChallenge: authorizationUrl.searchParams.has('code_challenge')
+      })}`)
     throw new McpReauthRequiredError({
       serverName: this.serverName,
       username: this.username,
@@ -366,7 +515,20 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
   }
 
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
+    oauthLogInfo(`[oauth:${this.username}:${this.serverName}] Provider saving PKCE code verifier ${JSON.stringify({
+        codeVerifier: truncateSensitiveValue(codeVerifier)
+      })}`)
     await this.tokenStore.saveCodeVerifier(this.serverName, this.username, codeVerifier)
+  }
+
+  async validateResourceURL(serverUrl: URL): Promise<URL> {
+    const resolvedResourceUrl = new URL(this.resource ?? serverUrl.toString())
+    oauthLogInfo(`[oauth:${this.username}:${this.serverName}] Validated OAuth resource URL ${JSON.stringify({
+        serverUrl: summarizeUrlForLog(serverUrl.toString()),
+        configuredResource: summarizeUrlForLog(this.resource),
+        resolvedResource: summarizeUrlForLog(resolvedResourceUrl.toString())
+      })}`)
+    return resolvedResourceUrl
   }
 
   private async refreshTokensIfNeeded(): Promise<McpOAuthTokenDecrypted> {
@@ -375,9 +537,16 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
       throw new Error(`OAuth token record not found for server ${this.serverName} and user ${this.username}`)
     }
     if (!record.expiresAt || record.expiresAt.getTime() > Date.now()) {
+      oauthLogInfo(`[oauth:${this.username}:${this.serverName}] Reusing current access token ${JSON.stringify({
+          expiresAt: record.expiresAt?.toISOString(),
+          tokenEndpointAuthMethod: record.tokenEndpointAuthMethod,
+          registrationMode: record.registrationMode,
+          hasRefreshToken: !!record.refreshToken
+        })}`)
       return record
     }
     if (!record.refreshToken) {
+      oauthLogInfo(`[oauth:${this.username}:${this.serverName}] Access token expired with no refresh token available`)
       throw new McpReauthRequiredError({
         serverName: this.serverName,
         username: this.username,
@@ -386,6 +555,15 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
     }
 
     try {
+      oauthLogInfo(`[oauth:${this.username}:${this.serverName}] Access token expired; attempting refresh ${JSON.stringify({
+          expiresAt: record.expiresAt?.toISOString(),
+          tokenEndpoint: summarizeUrlForLog(this.tokenEndpoint),
+          resource: summarizeUrlForLog(this.resource),
+          tokenEndpointAuthMethod: record.tokenEndpointAuthMethod,
+          registrationMode: record.registrationMode,
+          clientId: truncateSensitiveValue(record.clientId),
+          refreshToken: truncateSensitiveValue(record.refreshToken)
+        })}`)
       record = await this.tokenStore.refreshTokenRecord({
         serverName: this.serverName,
         username: this.username,
@@ -395,6 +573,11 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
       return record
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      oauthLogInfo(`[oauth:${this.username}:${this.serverName}] OAuth refresh attempt failed ${JSON.stringify({
+          message,
+          tokenEndpoint: summarizeUrlForLog(this.tokenEndpoint),
+          resource: summarizeUrlForLog(this.resource)
+        })}`)
       if (/invalid_grant|invalid_token/i.test(message)) {
         throw new McpReauthRequiredError({
           serverName: this.serverName,
@@ -436,6 +619,9 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
     if (!record?.codeVerifier) {
       throw new Error('PKCE code verifier not available for this OAuth session.')
     }
+    oauthLogInfo(`[oauth:${this.username}:${this.serverName}] Loaded PKCE code verifier ${JSON.stringify({
+        codeVerifier: truncateSensitiveValue(record.codeVerifier)
+      })}`)
     return record.codeVerifier
   }
 
@@ -450,10 +636,23 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
       : undefined
     this.tokensSnapshot = {
       access_token: record.accessToken,
+      // MissionSquad owns refresh behavior in refreshTokensIfNeeded().
+      // Do not expose refresh_token back to the SDK helper or it will refresh
+      // again on every 401 regardless of token expiry.
+      refresh_token: undefined,
       token_type: record.tokenType,
       expires_in: expiresIn,
       scope: record.scopes ? record.scopes.join(' ') : undefined
     }
+    oauthLogInfo(`[oauth:${this.username}:${this.serverName}] Returning provider token snapshot ${JSON.stringify({
+        hasAccessToken: !!this.tokensSnapshot.access_token,
+        hasRefreshToken: !!this.tokensSnapshot.refresh_token,
+        expiresIn: this.tokensSnapshot.expires_in,
+        scope: this.tokensSnapshot.scope,
+        tokenEndpointAuthMethod: record.tokenEndpointAuthMethod,
+        registrationMode: record.registrationMode,
+        resource: summarizeUrlForLog(this.resource)
+      })}`)
     return this.tokensSnapshot
   }
 }
