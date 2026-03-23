@@ -10,6 +10,9 @@ import { AuthController } from './controllers/auth'
 import { Secrets } from './services/secrets'
 import { registerBuiltInServers } from './builtin-servers'
 import { McpOAuthTokens } from './services/oauthTokens'
+import { McpUserSessions } from './services/userSessions'
+import { McpUserServerInstalls } from './services/userServerInstalls'
+import { McpDcrClients } from './services/dcrClients'
 
 export type Resource = {
   init: () => Promise<void>
@@ -48,9 +51,27 @@ export class API {
     // Initialize OAuth token store
     const oauthTokensService = new McpOAuthTokens({ mongoParams })
     await oauthTokensService.init()
-    
+
+    // Initialize user sessions store
+    const userSessionsService = new McpUserSessions({ mongoParams })
+    await userSessionsService.init()
+
+    const userServerInstalls = new McpUserServerInstalls({ mongoParams })
+    await userServerInstalls.init()
+
+    const dcrClients = new McpDcrClients({ mongoParams })
+    await dcrClients.init()
+
     // Initialize MCP controller
-    const mcpController = new MCPController({ app, mongoParams, secretsService, oauthTokensService })
+    const mcpController = new MCPController({
+      app,
+      mongoParams,
+      secretsService,
+      oauthTokensService,
+      userSessionsService,
+      userServerInstalls,
+      dcrClients
+    })
     await mcpController.init()
     mcpController.registerRoutes()
     this.resources.push(mcpController)

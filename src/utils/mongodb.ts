@@ -104,10 +104,10 @@ export class MongoDBClient<T extends Document> {
     }
     const indexes = await this.collection.indexes()
     const indexMaps = indexes.map(({ key }) => objectMapString(key))
-    for (const { name, key } of this.indexes) {
+    for (const { name, key, ...options } of this.indexes) {
       const indexMap = objectMapString(key)
       if (!indexMaps.includes(indexMap)) {
-        await this.collection.createIndexes([{ name, key }])
+        await this.collection.createIndexes([{ name, key, ...options }])
         log({ level: 'info', msg: `Created index ${name}` })
       }
     }

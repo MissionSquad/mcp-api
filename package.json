@@ -1,6 +1,6 @@
 {
   "name": "@missionsquad/mcp-api",
-  "version": "1.10.5",
+  "version": "1.11.0",
   "description": "MCP Servers exposed via HTTP API",
   "main": "dist/index.js",
   "repository": "missionsquad/mcp-api",
@@ -10,7 +10,11 @@
     "start": "node --experimental-require-module dist/index.js",
     "build": "rm -rf dist && tsc",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "test": "rm -rf data-test && mkdir -p data-test && jest --config jest.config.json"
+    "test": "rm -rf data-test && mkdir -p data-test && jest --config jest.config.json",
+    "mcp:semantics": "ts-node ./scripts/mcp-tool-semantics.ts ./scripts/atlassian-tools.json",
+    "mcp:semantics:sentence": "ts-node ./scripts/mcp-tool-semantics.ts ./scripts/atlassian-tools.json --style sentence",
+    "mcp:semantics:json": "ts-node ./scripts/mcp-tool-semantics.ts ./scripts/atlassian-tools.json --format json",
+    "mcp:semantics:out": "ts-node ./scripts/mcp-tool-semantics.ts ./scripts/atlassian-tools.json --out ./generated/jira-tool-semantics.md"
   },
   "keywords": [
     "node",

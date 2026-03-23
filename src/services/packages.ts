@@ -46,7 +46,6 @@ export interface InstallPackageRequest {
   env?: Record<string, string>
   url?: string
   headers?: Record<string, string>
-  sessionId?: string
   reconnectionOptions?: StreamableHTTPReconnectionOptions
   secretName?: string
   enabled?: boolean
@@ -298,7 +297,6 @@ export class PackageService {
       env: envVars,
       url,
       headers,
-      sessionId,
       reconnectionOptions,
       secretName,
       enabled = true,
@@ -320,7 +318,7 @@ export class PackageService {
       if (resolvedTransportType !== 'stdio') {
         return { success: false, error: 'Python runtime only supports stdio transport.' }
       }
-      if (url || headers || sessionId || reconnectionOptions) {
+      if (url || headers || reconnectionOptions) {
         return { success: false, error: 'Streamable HTTP fields are not allowed for python runtime.' }
       }
 
@@ -390,7 +388,6 @@ export class PackageService {
       env: envVars,
       url,
       headers,
-      sessionId,
       reconnectionOptions
     })
 
@@ -485,7 +482,6 @@ export class PackageService {
           transportType: 'streamable_http',
           url: url!,
           headers,
-          sessionId,
           reconnectionOptions,
           secretName,
           enabled
