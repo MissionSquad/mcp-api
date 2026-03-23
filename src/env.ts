@@ -4,6 +4,7 @@ dotenv.config()
 
 export const env = {
   DEBUG: /true/i.test(process.env.DEBUG || 'false'),
+  ENABLE_OAUTH_LOGGING: /true/i.test(process.env.ENABLE_OAUTH_LOGGING || 'false'),
   PORT: process.env.PORT || 8080,
   MONGO_USER: process.env.MONGO_USER || 'root',
   MONGO_PASS: process.env.MONGO_PASS || 'example',

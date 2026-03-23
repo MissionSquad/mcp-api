@@ -12,6 +12,7 @@ import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { CallToolResultSchema, ListToolsResultSchema } from '@modelcontextprotocol/sdk/types.js'
 import { Resource } from '..'
 import { BuiltInServer, BuiltInServerRegistry } from '../builtin-servers'
+import { env } from '../env'
 import { log, retryWithExponentialBackoff, sanitizeString } from '../utils/general'
 import { IndexDefinition, MongoConnectionParams, MongoDBClient } from '../utils/mongodb'
 import { Secrets } from './secrets'
@@ -469,6 +470,13 @@ export const resolveCompatibilityFallbackExternalOAuthResourceUri = (transportUr
     candidate.matchesTransportUrl(parsedTransportUrl)
   )
   return rule ? rule.resourceUri(parsedTransportUrl) : canonicalTransportResourceUri
+}
+
+const oauthLogInfo = (msg: string): void => {
+  if (!env.ENABLE_OAUTH_LOGGING) {
+    return
+  }
+  log({ level: 'info', msg })
 }
 
 const INVALID_ISSUER_OVERRIDE_PATH_SUFFIXES = [
@@ -1557,9 +1565,7 @@ export class MCPService implements Resource {
       return runtimeUrl ? { url: runtimeUrl } : {}
     }
 
-    log({
-      level: 'info',
-      msg: `[oauth:${username}:${server.name}] Building transport auth provider ${JSON.stringify({
+    oauthLogInfo(`[oauth:${username}:${server.name}] Building transport auth provider ${JSON.stringify({
         transportUrl: server.url,
         runtimeUrl,
         resourceUri: server.oauthTemplate?.resourceUri,
@@ -1575,8 +1581,7 @@ export class MCPService implements Resource {
           hasRefreshToken: !!record.refreshToken,
           hasClientSecret: !!record.clientSecret
         }
-      })}`
-    })
+      })}`)
 
     const authProvider = new McpOAuthClientProvider({
       serverName: server.name,
@@ -2299,10 +2304,7 @@ export class MCPService implements Resource {
 
     const inFlight = this.userConnectionInFlight.get(userKey)
     if (inFlight) {
-      log({
-        level: 'info',
-        msg: `[${username}:${server.name}] Connection already in flight; awaiting existing attempt.`
-      })
+      oauthLogInfo(`[${username}:${server.name}] Connection already in flight; awaiting existing attempt.`)
       return inFlight
     }
 
