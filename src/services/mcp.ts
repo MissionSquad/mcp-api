@@ -71,6 +71,11 @@ export type McpServerSource = 'platform' | 'external'
 export type McpServerAuthMode = 'none' | 'oauth2'
 export type McpExternalOAuthDiscoverySource = 'prm' | 'issuer_override'
 
+export interface McpExternalOAuthAuthorizationRequestParam {
+  name: string
+  value: string
+}
+
 export interface McpExternalSecretField {
   name: string
   label: string
@@ -97,6 +102,7 @@ export interface McpExternalOAuthTemplate {
   clientIdMetadataDocumentSupported?: boolean
   registrationEndpoint?: string
   tokenEndpointAuthMethodsSupported?: SupportedTokenEndpointAuthMethod[]
+  authorizationRequestParams?: McpExternalOAuthAuthorizationRequestParam[]
 }
 
 export interface DiscoverExternalAuthorizationInput {
@@ -422,6 +428,17 @@ const DISCOVERY_BASE_DELAY_MS = 500
 const DISCOVERY_TOTAL_BUDGET_MS = 20000
 const REQUIRED_PKCE_CHALLENGE_METHOD = 'S256'
 const RESOURCE_URI_BACKFILL_FAILURE_COOLDOWN_MS = 15 * 60 * 1000
+const OAUTH_AUTHORIZATION_REQUEST_PARAM_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,99}$/
+const RESERVED_OAUTH_AUTHORIZATION_REQUEST_PARAM_NAMES = new Set([
+  'response_type',
+  'client_id',
+  'redirect_uri',
+  'state',
+  'scope',
+  'resource',
+  'code_challenge',
+  'code_challenge_method'
+])
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -439,6 +456,59 @@ const toOptionalStringArray = (value: unknown): string[] | undefined => {
 
 const getOptionalString = (value: unknown): string | undefined =>
   typeof value === 'string' ? value : undefined
+
+const normalizeAuthorizationRequestParamEntries = (
+  value: unknown
+): McpExternalOAuthAuthorizationRequestParam[] | undefined => {
+  if (value === undefined) {
+    return undefined
+  }
+  if (!Array.isArray(value)) {
+    throw new McpValidationError('oauthTemplate.authorizationRequestParams must be an array when provided')
+  }
+
+  const normalized = value.map((item, index) => {
+    if (!isRecord(item)) {
+      throw new McpValidationError(
+        `oauthTemplate.authorizationRequestParams[${index}] must be an object with name and value`
+      )
+    }
+
+    const name = getOptionalString(item.name)?.trim()
+    const value = getOptionalString(item.value)?.trim()
+
+    if (!name) {
+      throw new McpValidationError(`oauthTemplate.authorizationRequestParams[${index}].name is required`)
+    }
+    if (!OAUTH_AUTHORIZATION_REQUEST_PARAM_NAME_PATTERN.test(name)) {
+      throw new McpValidationError(
+        `oauthTemplate.authorizationRequestParams[${index}].name is invalid: ${name}`
+      )
+    }
+    if (RESERVED_OAUTH_AUTHORIZATION_REQUEST_PARAM_NAMES.has(name)) {
+      throw new McpValidationError(
+        `oauthTemplate.authorizationRequestParams[${index}].name must not override reserved OAuth parameter ${name}`
+      )
+    }
+    if (!value) {
+      throw new McpValidationError(`oauthTemplate.authorizationRequestParams[${index}].value is required`)
+    }
+
+    return { name, value }
+  })
+
+  const seenNames = new Set<string>()
+  for (const entry of normalized) {
+    if (seenNames.has(entry.name)) {
+      throw new McpValidationError(
+        `oauthTemplate.authorizationRequestParams contains duplicate parameter name ${entry.name}`
+      )
+    }
+    seenNames.add(entry.name)
+  }
+
+  return normalized.length > 0 ? normalized : undefined
+}
 
 export const canonicalizeExternalOAuthResourceUri = (input: string): string => {
   const parsed = new URL(input)
@@ -1723,6 +1793,7 @@ export class MCPService implements Resource {
     if (!oauthTemplate.resourceUri) {
       throw new McpValidationError('oauthTemplate.resourceUri is required for external OAuth servers')
     }
+    normalizeAuthorizationRequestParamEntries(oauthTemplate.authorizationRequestParams)
 
     if (oauthTemplate.pkceRequired !== true) {
       throw new McpValidationError('oauthTemplate.pkceRequired must be true for external OAuth servers')
@@ -1820,6 +1891,10 @@ export class MCPService implements Resource {
       throw new McpValidationError('oauthTemplate is required when authMode is oauth2')
     }
 
+    const normalizedAuthorizationRequestParams = normalizeAuthorizationRequestParamEntries(
+      oauthTemplate.authorizationRequestParams
+    )
+
     if (oauthTemplate.discoveryMode === 'auto') {
       const normalizedDiscoverySource = oauthTemplate.discoverySource ?? 'prm'
       this.assertAbsoluteUrl(
@@ -1846,6 +1921,9 @@ export class MCPService implements Resource {
 
     const normalizedTemplate: McpExternalOAuthTemplate = {
       ...oauthTemplate,
+      ...(normalizedAuthorizationRequestParams
+        ? { authorizationRequestParams: normalizedAuthorizationRequestParams }
+        : { authorizationRequestParams: undefined }),
       ...(oauthTemplate.discoveryMode === 'auto' && !oauthTemplate.discoverySource
         ? { discoverySource: 'prm' as const }
         : {}),
