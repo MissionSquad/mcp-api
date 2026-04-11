@@ -109,6 +109,8 @@ const oauthLogInfo = (msg: string): void => {
   log({ level: 'info', msg })
 }
 
+const ACCESS_TOKEN_EXPIRY_SKEW_MS = 30_000
+
 export class McpOAuthTokens {
   private encryptor: SecretEncryptor
   private dbClient: MongoDBClient<McpOAuthTokenRecord>
@@ -536,7 +538,7 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
     if (!record) {
       throw new Error(`OAuth token record not found for server ${this.serverName} and user ${this.username}`)
     }
-    if (!record.expiresAt || record.expiresAt.getTime() > Date.now()) {
+    if (!record.expiresAt || record.expiresAt.getTime() - ACCESS_TOKEN_EXPIRY_SKEW_MS > Date.now()) {
       oauthLogInfo(`[oauth:${this.username}:${this.serverName}] Reusing current access token ${JSON.stringify({
           expiresAt: record.expiresAt?.toISOString(),
           tokenEndpointAuthMethod: record.tokenEndpointAuthMethod,
@@ -636,10 +638,9 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
       : undefined
     this.tokensSnapshot = {
       access_token: record.accessToken,
-      // MissionSquad owns refresh behavior in refreshTokensIfNeeded().
-      // Do not expose refresh_token back to the SDK helper or it will refresh
-      // again on every 401 regardless of token expiry.
-      refresh_token: undefined,
+      // Expose the persisted refresh token so the MCP SDK can recover from
+      // server-side 401s without forcing the user back through OAuth.
+      refresh_token: record.refreshToken,
       token_type: record.tokenType,
       expires_in: expiresIn,
       scope: record.scopes ? record.scopes.join(' ') : undefined

@@ -14,6 +14,7 @@ import {
   shouldFallbackToSse
 } from '../src/services/mcp'
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { auth as runOAuthFlow } from '@modelcontextprotocol/sdk/client/auth.js'
 import dns from 'dns/promises'
 import {
   McpServerAlreadyExistsError,
@@ -185,9 +186,78 @@ describe('external MCP request validation', () => {
       shouldFallbackToSse(new StreamableHTTPError(-1, 'Unexpected content type: text/html; charset=utf-8'))
     ).toBe(true)
   })
+
+  test('rejects reserved OAuth authorization request params on external OAuth templates', () => {
+    const service = new MCPService({
+      mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' },
+      secretsService: {} as never,
+      userServerInstalls: {} as never
+    })
+
+    expect(() =>
+      (service as any).validateExternalOAuthTemplate(
+        'oauth2',
+        {
+          authorizationServerIssuer: '',
+          authorizationServerMetadataUrl: '',
+          resourceMetadataUrl: '',
+          resourceUri: 'https://mcp.example.com/v1/mcp',
+          authorizationEndpoint: 'https://auth.example.com/authorize',
+          tokenEndpoint: 'https://auth.example.com/token',
+          codeChallengeMethodsSupported: ['S256'],
+          pkceRequired: true,
+          discoveryMode: 'manual',
+          registrationMode: 'manual',
+          authorizationRequestParams: [{ name: 'scope', value: 'email profile' }]
+        },
+        'https://mcp.example.com/v1/mcp'
+      )
+    ).toThrow('oauthTemplate.authorizationRequestParams[0].name must not override reserved OAuth parameter scope')
+  })
+
+  test('normalizes provider-specific OAuth authorization request params for persistence', async () => {
+    const service = new MCPService({
+      mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' },
+      secretsService: {} as never,
+      userServerInstalls: {} as never
+    })
+
+    const normalized = await (service as any).normalizeExternalOAuthTemplateForPersistence(
+      'oauth2',
+      'https://mcp.example.com/v1/mcp',
+      {
+        authorizationServerIssuer: '',
+        authorizationServerMetadataUrl: '',
+        resourceMetadataUrl: '',
+        resourceUri: 'https://mcp.example.com/v1/mcp',
+        authorizationEndpoint: 'https://auth.example.com/authorize',
+        tokenEndpoint: 'https://auth.example.com/token',
+        codeChallengeMethodsSupported: ['S256'],
+        pkceRequired: true,
+        discoveryMode: 'manual',
+        registrationMode: 'manual',
+        authorizationRequestParams: [
+          { name: ' access_type ', value: ' offline ' },
+          { name: 'prompt', value: 'consent' }
+        ]
+      }
+    )
+
+    expect(normalized).toMatchObject({
+      authorizationRequestParams: [
+        { name: 'access_type', value: 'offline' },
+        { name: 'prompt', value: 'consent' }
+      ]
+    })
+  })
 })
 
 describe('external MCP error contract', () => {
+  afterEach(() => {
+    global.fetch = originalFetch
+    jest.restoreAllMocks()
+  })
+
   test('reauth errors serialize to a machine-readable response', () => {
     const error = new McpReauthRequiredError({
       serverName: 'remote-shopify',
@@ -301,7 +371,7 @@ describe('external MCP error contract', () => {
     })
   })
 
-  test('oauth provider suppresses SDK-owned refresh by omitting refresh token from returned snapshots', async () => {
+  test('oauth provider returns the persisted refresh token to the MCP SDK', async () => {
     const noSecretRecord = {
       serverName: 'webflow',
       username: 'alice',
@@ -355,13 +425,107 @@ describe('external MCP error contract', () => {
 
     await expect(noSecretProvider.tokens()).resolves.toMatchObject({
       access_token: 'access-none',
-      refresh_token: undefined
+      refresh_token: 'refresh-none'
     })
 
     await expect(clientSecretProvider.tokens()).resolves.toMatchObject({
       access_token: 'access-post',
-      refresh_token: undefined
+      refresh_token: 'refresh-post'
     })
+  })
+
+  test('oauth helper refreshes tokens instead of redirecting when a refresh token is available', async () => {
+    global.fetch = jest.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+
+      if (url === 'https://example.com/.well-known/oauth-protected-resource') {
+        return new Response('Not Found', { status: 404 })
+      }
+
+      if (url === 'https://example.com/.well-known/oauth-authorization-server') {
+        return new Response(
+          JSON.stringify({
+            issuer: 'https://example.com',
+            authorization_endpoint: 'https://example.com/authorize',
+            token_endpoint: 'https://example.com/token',
+            response_types_supported: ['code'],
+            grant_types_supported: ['authorization_code', 'refresh_token'],
+            code_challenge_methods_supported: ['S256']
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          }
+        )
+      }
+
+      if (url === 'https://example.com/token') {
+        expect(init?.method).toBe('POST')
+        return new Response(
+          JSON.stringify({
+            access_token: 'refreshed-access',
+            refresh_token: 'refreshed-refresh',
+            token_type: 'Bearer',
+            expires_in: 3600
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          }
+        )
+      }
+
+      throw new Error(`Unexpected fetch url: ${url}`)
+    }) as typeof global.fetch
+
+    const tokenStore = {
+      getTokenRecord: jest.fn().mockResolvedValue({
+        serverName: 'remote-shopify',
+        username: 'alice',
+        tokenType: 'Bearer',
+        accessToken: 'current-access',
+        refreshToken: 'current-refresh',
+        clientId: 'client-id',
+        clientSecret: 'client-secret',
+        redirectUri: 'https://missionsquad.example/callback',
+        tokenEndpointAuthMethod: 'client_secret_post' as const,
+        registrationMode: 'manual' as const,
+        createdAt: new Date('2026-03-23T00:00:00.000Z'),
+        updatedAt: new Date('2026-03-23T00:00:00.000Z')
+      }),
+      saveTokens: jest.fn().mockResolvedValue(undefined)
+    } as unknown as McpOAuthTokens
+
+    const provider = new McpOAuthClientProvider({
+      serverName: 'remote-shopify',
+      username: 'alice',
+      tokenStore,
+      record: {
+        serverName: 'remote-shopify',
+        username: 'alice',
+        tokenType: 'Bearer',
+        accessToken: 'current-access',
+        refreshToken: 'current-refresh',
+        clientId: 'client-id',
+        clientSecret: 'client-secret',
+        redirectUri: 'https://missionsquad.example/callback',
+        tokenEndpointAuthMethod: 'client_secret_post',
+        registrationMode: 'manual',
+        createdAt: new Date('2026-03-23T00:00:00.000Z'),
+        updatedAt: new Date('2026-03-23T00:00:00.000Z')
+      },
+      tokenEndpoint: 'https://example.com/token'
+    })
+
+    await expect(runOAuthFlow(provider, { serverUrl: 'https://example.com/mcp' })).resolves.toBe('AUTHORIZED')
+    expect((tokenStore as unknown as { saveTokens: jest.Mock }).saveTokens).toHaveBeenCalledWith(
+      'remote-shopify',
+      'alice',
+      expect.objectContaining({
+        access_token: 'refreshed-access',
+        refresh_token: 'refreshed-refresh'
+      })
+    )
   })
 
   test('oauth provider validates resource url using the configured compatibility resource', async () => {
