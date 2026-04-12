@@ -807,6 +807,10 @@ export type TransportFactoryOptions = {
   url?: string
 }
 
+type BuildTransportOptionsInput = {
+  includeAuthProvider?: boolean
+}
+
 export const createTransport = (server: MCPServer, options: TransportFactoryOptions = {}): Transport => {
   if (server.transportType === 'streamable_http') {
     const requestInit = options.requestInit ?? buildRequestInit(server.headers)
@@ -1613,7 +1617,11 @@ export class MCPService implements Resource {
     return this.migrateServerTransport(withRuntimeOauthTemplate)
   }
 
-  private async buildTransportOptions(server: MCPServer, username?: string): Promise<TransportFactoryOptions> {
+  private async buildTransportOptions(
+    server: MCPServer,
+    username?: string,
+    input: BuildTransportOptionsInput = {}
+  ): Promise<TransportFactoryOptions> {
     if (server.transportType !== 'streamable_http') {
       return {}
     }
@@ -1628,6 +1636,16 @@ export class MCPService implements Resource {
 
     if (!this.oauthTokensService || !username) {
       return runtimeUrl ? { url: runtimeUrl } : {}
+    }
+
+    const sanitizedHeaders = stripAuthorizationHeaders(server.headers)
+
+    if (input.includeAuthProvider === false) {
+      oauthLogInfo(`[oauth:${username}:${server.name}] Building transport without auth provider so persisted session resume is attempted first`)
+      return {
+        requestInit: buildRequestInit(sanitizedHeaders ?? {}),
+        ...(runtimeUrl ? { url: runtimeUrl } : {})
+      }
     }
 
     const record = await this.oauthTokensService.getTokenRecord(server.name, username)
@@ -1665,7 +1683,6 @@ export class MCPService implements Resource {
       tokenEndpointAuthMethodsSupported: server.oauthTemplate?.tokenEndpointAuthMethodsSupported,
       dcrClients: this.dcrClients
     })
-    const sanitizedHeaders = stripAuthorizationHeaders(server.headers)
     return {
       authProvider,
       requestInit: buildRequestInit(sanitizedHeaders ?? {}),
@@ -2398,7 +2415,8 @@ export class MCPService implements Resource {
   private async connectUserToServerInternal(
     username: string,
     server: MCPServer,
-    allowSessionRetry = true
+    allowSessionRetry = true,
+    forceAuthProvider = false
   ): Promise<UserConnection> {
     if (server.transportType !== 'streamable_http') {
       throw new Error(`connectUserToServer is only for streamable_http servers, got ${server.transportType}`)
@@ -2420,6 +2438,7 @@ export class MCPService implements Resource {
       const sessionRecord = await this.userSessionsService.getSession(server.name, username)
       sessionId = sessionRecord?.sessionId ?? undefined
     }
+    const shouldPreferSessionResume = !!sessionId && !forceAuthProvider
 
     const transportErrorHandler = async (error: Error) => {
       log({ level: 'error', msg: `[${username}:${server.name}] transport error: ${error.message}`, error })
@@ -2442,7 +2461,9 @@ export class MCPService implements Resource {
         { name: 'MSQStdioClient', version: '1.0.0' },
         { capabilities: { prompts: {}, resources: {}, tools: {} } }
       )
-      const transportOptions = await this.buildTransportOptions(server, username)
+      const transportOptions = await this.buildTransportOptions(server, username, {
+        includeAuthProvider: !shouldPreferSessionResume
+      })
       const transport = createTransport(server, { ...transportOptions, sessionId })
 
       const userConn: UserConnection = {
@@ -2478,11 +2499,22 @@ export class MCPService implements Resource {
 
       return userConn
     } catch (error) {
+      const httpStatus = extractHttpStatusFromError(error)
+
+      if (sessionId && shouldPreferSessionResume && allowSessionRetry && httpStatus === 401) {
+        log({
+          level: 'warn',
+          msg: `[${username}:${server.name}] Session resume returned 401 without auth provider. Retrying with bearer auth.`
+        })
+        await this.teardownUserConnection(userKey, 'session_expired')
+        return this.connectUserToServerInternal(username, server, false, true)
+      }
+
       // Session expired — retry without sessionId
       if (
         sessionId &&
         allowSessionRetry &&
-        extractHttpStatusFromError(error) === 404
+        httpStatus === 404
       ) {
         log({
           level: 'warn',
