@@ -819,10 +819,6 @@ export type TransportFactoryOptions = {
   url?: string
 }
 
-type BuildTransportOptionsInput = {
-  includeAuthProvider?: boolean
-}
-
 export const createTransport = (server: MCPServer, options: TransportFactoryOptions = {}): Transport => {
   if (server.transportType === 'streamable_http') {
     const requestInit = options.requestInit ?? buildRequestInit(server.headers)
@@ -1629,11 +1625,7 @@ export class MCPService implements Resource {
     return this.migrateServerTransport(withRuntimeOauthTemplate)
   }
 
-  private async buildTransportOptions(
-    server: MCPServer,
-    username?: string,
-    input: BuildTransportOptionsInput = {}
-  ): Promise<TransportFactoryOptions> {
+  private async buildTransportOptions(server: MCPServer, username?: string): Promise<TransportFactoryOptions> {
     if (server.transportType !== 'streamable_http') {
       return {}
     }
@@ -1651,14 +1643,6 @@ export class MCPService implements Resource {
     }
 
     const sanitizedHeaders = stripAuthorizationHeaders(server.headers)
-
-    if (input.includeAuthProvider === false) {
-      oauthLogInfo(`[oauth:${username}:${server.name}] Building transport without auth provider so persisted session resume is attempted first`)
-      return {
-        requestInit: buildRequestInit(sanitizedHeaders ?? {}),
-        ...(runtimeUrl ? { url: runtimeUrl } : {})
-      }
-    }
 
     const record = await this.oauthTokensService.getTokenRecord(server.name, username)
     if (!record) {
@@ -2427,8 +2411,7 @@ export class MCPService implements Resource {
   private async connectUserToServerInternal(
     username: string,
     server: MCPServer,
-    allowSessionRetry = true,
-    forceAuthProvider = false
+    allowSessionRetry = true
   ): Promise<UserConnection> {
     if (server.transportType !== 'streamable_http') {
       throw new Error(`connectUserToServer is only for streamable_http servers, got ${server.transportType}`)
@@ -2450,12 +2433,11 @@ export class MCPService implements Resource {
       const sessionRecord = await this.userSessionsService.getSession(server.name, username)
       sessionId = sessionRecord?.sessionId ?? undefined
     }
-    const shouldPreferSessionResume = !!sessionId && !forceAuthProvider
     oauthLogInfo(
       `[oauth:${username}:${server.name}] Preparing user connection ${JSON.stringify({
         hasPersistedSession: !!sessionId,
-        sessionResumePreferred: shouldPreferSessionResume,
-        forceAuthProvider,
+        sessionResumePreferred: false,
+        forceAuthProvider: false,
         transportUrl: summarizeUrlForLog(server.url)
       })}`
     )
@@ -2481,9 +2463,7 @@ export class MCPService implements Resource {
         { name: 'MSQStdioClient', version: '1.0.0' },
         { capabilities: { prompts: {}, resources: {}, tools: {} } }
       )
-      const transportOptions = await this.buildTransportOptions(server, username, {
-        includeAuthProvider: !shouldPreferSessionResume
-      })
+      const transportOptions = await this.buildTransportOptions(server, username)
       const transport = createTransport(server, { ...transportOptions, sessionId })
 
       const userConn: UserConnection = {
@@ -2517,7 +2497,7 @@ export class MCPService implements Resource {
       }
       oauthLogInfo(
         `[oauth:${username}:${server.name}] User connection established ${JSON.stringify({
-          connectedVia: shouldPreferSessionResume ? 'session_resume' : 'auth_provider',
+          connectedVia: 'auth_provider',
           hasPersistedSession: !!sessionId,
           persistedSessionUpdated: transport instanceof StreamableHTTPClientTransport
         })}`
@@ -2530,19 +2510,10 @@ export class MCPService implements Resource {
       oauthLogInfo(
         `[oauth:${username}:${server.name}] User connection attempt failed ${JSON.stringify({
           httpStatus,
-          attemptedMode: shouldPreferSessionResume ? 'session_resume' : 'auth_provider',
+          attemptedMode: 'auth_provider',
           hasPersistedSession: !!sessionId
         })}`
       )
-
-      if (sessionId && shouldPreferSessionResume && allowSessionRetry && httpStatus === 401) {
-        log({
-          level: 'warn',
-          msg: `[${username}:${server.name}] Session resume returned 401 without auth provider. Retrying with bearer auth.`
-        })
-        await this.teardownUserConnection(userKey, 'session_expired')
-        return this.connectUserToServerInternal(username, server, false, true)
-      }
 
       // Session expired — retry without sessionId
       if (
