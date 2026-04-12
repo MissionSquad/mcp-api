@@ -109,6 +109,10 @@ const oauthLogInfo = (msg: string): void => {
   log({ level: 'info', msg })
 }
 
+const oauthLifecycleInfo = (msg: string): void => {
+  log({ level: 'info', msg })
+}
+
 const ACCESS_TOKEN_EXPIRY_SKEW_MS = 30_000
 
 export class McpOAuthTokens {
@@ -289,15 +293,15 @@ export class McpOAuthTokens {
       throw new Error(`OAuth refresh token not found for server ${input.serverName} and user ${input.username}`)
     }
 
-    oauthLogInfo(`[oauth:${input.username}:${input.serverName}] Starting OAuth refresh ${JSON.stringify({
+    oauthLifecycleInfo(`[oauth:${input.username}:${input.serverName}] Starting OAuth refresh ${JSON.stringify({
         tokenEndpoint: summarizeUrlForLog(input.tokenEndpoint),
         resource: summarizeUrlForLog(input.resource),
         clientId: truncateSensitiveValue(existing.clientId),
-        refreshToken: truncateSensitiveValue(existing.refreshToken),
         tokenEndpointAuthMethod: existing.tokenEndpointAuthMethod,
         registrationMode: existing.registrationMode,
         expiresAt: existing.expiresAt?.toISOString(),
-        scopes: existing.scopes
+        scopes: existing.scopes,
+        hasRefreshToken: !!existing.refreshToken
       })}`)
 
     const params = new URLSearchParams({
@@ -349,7 +353,7 @@ export class McpOAuthTokens {
     if (!response.ok) {
       const errorCode = (parsed as { error?: string }).error || `HTTP_${response.status}`
       const errorDescription = (parsed as { error_description?: string }).error_description
-      oauthLogInfo(`[oauth:${input.username}:${input.serverName}] Refresh failed ${JSON.stringify({
+      oauthLifecycleInfo(`[oauth:${input.username}:${input.serverName}] OAuth refresh failed ${JSON.stringify({
           status: response.status,
           error: errorCode,
           errorDescription,
@@ -365,13 +369,12 @@ export class McpOAuthTokens {
       throw new Error(`OAuth token record not found after refresh for server ${input.serverName}`)
     }
 
-    oauthLogInfo(`[oauth:${input.username}:${input.serverName}] Refresh succeeded ${JSON.stringify({
+    oauthLifecycleInfo(`[oauth:${input.username}:${input.serverName}] OAuth refresh succeeded ${JSON.stringify({
         returnedResource: typeof (parsed as Record<string, unknown>).resource === 'string'
           ? summarizeUrlForLog((parsed as Record<string, unknown>).resource as string)
           : undefined,
         expiresAt: updated.expiresAt?.toISOString(),
         hasRefreshToken: !!updated.refreshToken,
-        refreshToken: truncateSensitiveValue(updated.refreshToken),
         tokenType: updated.tokenType,
         scopes: updated.scopes
       })}`)
@@ -501,7 +504,7 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
   }
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
-    oauthLogInfo(`[oauth:${this.username}:${this.serverName}] Redirecting to authorization ${JSON.stringify({
+    oauthLifecycleInfo(`[oauth:${this.username}:${this.serverName}] OAuth authorization required ${JSON.stringify({
         authorizationUrl: summarizeUrlForLog(authorizationUrl.toString()),
         clientId: truncateSensitiveValue(authorizationUrl.searchParams.get('client_id') || undefined),
         resource: summarizeUrlForLog(authorizationUrl.searchParams.get('resource') || undefined),

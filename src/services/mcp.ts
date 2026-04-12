@@ -800,6 +800,18 @@ const buildRequestInit = (headers?: Record<string, string>): RequestInit | undef
   return { headers }
 }
 
+const summarizeUrlForLog = (value: string | undefined): string | undefined => {
+  if (!value) {
+    return undefined
+  }
+  try {
+    const parsed = new URL(value)
+    return `${parsed.origin}${parsed.pathname}`
+  } catch {
+    return value.replace(/[?#].*$/, '')
+  }
+}
+
 export type TransportFactoryOptions = {
   requestInit?: RequestInit
   authProvider?: OAuthClientProvider
@@ -1654,12 +1666,12 @@ export class MCPService implements Resource {
     }
 
     oauthLogInfo(`[oauth:${username}:${server.name}] Building transport auth provider ${JSON.stringify({
-        transportUrl: server.url,
-        runtimeUrl,
-        resourceUri: server.oauthTemplate?.resourceUri,
-        authorizationServerIssuer: server.oauthTemplate?.authorizationServerIssuer,
-        registrationEndpoint: server.oauthTemplate?.registrationEndpoint,
-        tokenEndpoint: server.oauthTemplate?.tokenEndpoint,
+        transportUrl: summarizeUrlForLog(server.url),
+        runtimeUrl: summarizeUrlForLog(runtimeUrl),
+        resourceUri: summarizeUrlForLog(server.oauthTemplate?.resourceUri),
+        authorizationServerIssuer: summarizeUrlForLog(server.oauthTemplate?.authorizationServerIssuer),
+        registrationEndpoint: summarizeUrlForLog(server.oauthTemplate?.registrationEndpoint),
+        tokenEndpoint: summarizeUrlForLog(server.oauthTemplate?.tokenEndpoint),
         tokenEndpointAuthMethodsSupported: server.oauthTemplate?.tokenEndpointAuthMethodsSupported,
         persistedRecord: {
           clientId: record.clientId ? `${record.clientId.slice(0, 4)}...${record.clientId.slice(-4)}` : undefined,
@@ -2439,6 +2451,14 @@ export class MCPService implements Resource {
       sessionId = sessionRecord?.sessionId ?? undefined
     }
     const shouldPreferSessionResume = !!sessionId && !forceAuthProvider
+    oauthLogInfo(
+      `[oauth:${username}:${server.name}] Preparing user connection ${JSON.stringify({
+        hasPersistedSession: !!sessionId,
+        sessionResumePreferred: shouldPreferSessionResume,
+        forceAuthProvider,
+        transportUrl: summarizeUrlForLog(server.url)
+      })}`
+    )
 
     const transportErrorHandler = async (error: Error) => {
       log({ level: 'error', msg: `[${username}:${server.name}] transport error: ${error.message}`, error })
@@ -2495,11 +2515,25 @@ export class MCPService implements Resource {
       if (transport instanceof StreamableHTTPClientTransport) {
         await this.persistUserSessionId(server.name, username, transport)
       }
+      oauthLogInfo(
+        `[oauth:${username}:${server.name}] User connection established ${JSON.stringify({
+          connectedVia: shouldPreferSessionResume ? 'session_resume' : 'auth_provider',
+          hasPersistedSession: !!sessionId,
+          persistedSessionUpdated: transport instanceof StreamableHTTPClientTransport
+        })}`
+      )
       log({ level: 'info', msg: `[${username}:${server.name}] Connected successfully.` })
 
       return userConn
     } catch (error) {
       const httpStatus = extractHttpStatusFromError(error)
+      oauthLogInfo(
+        `[oauth:${username}:${server.name}] User connection attempt failed ${JSON.stringify({
+          httpStatus,
+          attemptedMode: shouldPreferSessionResume ? 'session_resume' : 'auth_provider',
+          hasPersistedSession: !!sessionId
+        })}`
+      )
 
       if (sessionId && shouldPreferSessionResume && allowSessionRetry && httpStatus === 401) {
         log({
