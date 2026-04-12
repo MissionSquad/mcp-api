@@ -800,6 +800,18 @@ const buildRequestInit = (headers?: Record<string, string>): RequestInit | undef
   return { headers }
 }
 
+const summarizeUrlForLog = (value: string | undefined): string | undefined => {
+  if (!value) {
+    return undefined
+  }
+  try {
+    const parsed = new URL(value)
+    return `${parsed.origin}${parsed.pathname}`
+  } catch {
+    return value.replace(/[?#].*$/, '')
+  }
+}
+
 export type TransportFactoryOptions = {
   requestInit?: RequestInit
   authProvider?: OAuthClientProvider
@@ -1654,12 +1666,12 @@ export class MCPService implements Resource {
     }
 
     oauthLogInfo(`[oauth:${username}:${server.name}] Building transport auth provider ${JSON.stringify({
-        transportUrl: server.url,
-        runtimeUrl,
-        resourceUri: server.oauthTemplate?.resourceUri,
-        authorizationServerIssuer: server.oauthTemplate?.authorizationServerIssuer,
-        registrationEndpoint: server.oauthTemplate?.registrationEndpoint,
-        tokenEndpoint: server.oauthTemplate?.tokenEndpoint,
+        transportUrl: summarizeUrlForLog(server.url),
+        runtimeUrl: summarizeUrlForLog(runtimeUrl),
+        resourceUri: summarizeUrlForLog(server.oauthTemplate?.resourceUri),
+        authorizationServerIssuer: summarizeUrlForLog(server.oauthTemplate?.authorizationServerIssuer),
+        registrationEndpoint: summarizeUrlForLog(server.oauthTemplate?.registrationEndpoint),
+        tokenEndpoint: summarizeUrlForLog(server.oauthTemplate?.tokenEndpoint),
         tokenEndpointAuthMethodsSupported: server.oauthTemplate?.tokenEndpointAuthMethodsSupported,
         persistedRecord: {
           clientId: record.clientId ? `${record.clientId.slice(0, 4)}...${record.clientId.slice(-4)}` : undefined,
@@ -2444,7 +2456,7 @@ export class MCPService implements Resource {
         hasPersistedSession: !!sessionId,
         sessionResumePreferred: shouldPreferSessionResume,
         forceAuthProvider,
-        transportUrl: server.url
+        transportUrl: summarizeUrlForLog(server.url)
       })}`
     )
 

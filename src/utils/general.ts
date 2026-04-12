@@ -4,11 +4,74 @@ export interface StringMap {
   [key: string]: string
 }
 
+function summarizeUrlForErrorLog(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined
+  }
+  try {
+    const parsed = new URL(value)
+    return `${parsed.origin}${parsed.pathname}`
+  } catch {
+    return value
+  }
+}
+
+export function summarizeErrorForLog(error: any): string {
+  if (error == null) {
+    return 'unknown error'
+  }
+  if (typeof error === 'string') {
+    return error
+  }
+  if (error instanceof Error) {
+    const axiosLike = error as Error & {
+      code?: string
+      status?: number
+      config?: { method?: string; url?: string }
+      response?: { status?: number; statusText?: string }
+    }
+    const method = axiosLike.config?.method?.toUpperCase()
+    const url = summarizeUrlForErrorLog(axiosLike.config?.url)
+    const status = axiosLike.response?.status ?? axiosLike.status
+    const statusText = axiosLike.response?.statusText
+    const code = axiosLike.code
+    return JSON.stringify({
+      name: axiosLike.name,
+      message: axiosLike.message,
+      code,
+      status,
+      statusText,
+      method,
+      url
+    })
+  }
+  if (typeof error === 'object') {
+    const objectError = error as {
+      message?: string
+      code?: string
+      status?: number
+      method?: string
+      url?: string
+      response?: { status?: number; statusText?: string }
+      config?: { method?: string; url?: string }
+    }
+    return JSON.stringify({
+      message: objectError.message,
+      code: objectError.code,
+      status: objectError.response?.status ?? objectError.status,
+      statusText: objectError.response?.statusText,
+      method: objectError.config?.method?.toUpperCase() ?? objectError.method,
+      url: summarizeUrlForErrorLog(objectError.config?.url ?? objectError.url)
+    })
+  }
+  return String(error)
+}
+
 export function log({ level, msg, error }: { level: string; msg: string; error?: any }) {
   if (!env.DEBUG && level === 'debug') return
   console.log(`[${new Date().toISOString()}] [${level.toUpperCase()}] ${msg}`)
   if (error != null) {
-    console.error(error)
+    console.error(summarizeErrorForLog(error))
   }
 }
 
@@ -73,8 +136,7 @@ export function retryWithExponentialBackoff(
       return await fn()
     } catch (error) {
       if (attempt >= maxAttempts) {
-        // throw error
-        console.error(error)
+        console.error(summarizeErrorForLog(error))
         return { error }
       }
 
