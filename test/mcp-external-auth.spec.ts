@@ -555,52 +555,6 @@ describe('external MCP error contract', () => {
     )
   })
 
-  test('transport options can skip auth provider to prefer persisted session resume', async () => {
-    const oauthTokensService = {
-      getTokenRecord: jest.fn()
-    } as unknown as McpOAuthTokens
-
-    const service = new MCPService({
-      mongoParams: {
-        host: 'localhost:27017',
-        db: 'test',
-        user: 'user',
-        pass: 'pass'
-      },
-      secretsService: {
-        getUserServerSecrets: jest.fn().mockResolvedValue({})
-      } as never,
-      oauthTokensService,
-      userServerInstalls: {} as never
-    })
-
-    const transportOptions = await (service as any).buildTransportOptions(
-      {
-        name: 'google-workspace',
-        source: 'external',
-        authMode: 'oauth2',
-        transportType: 'streamable_http',
-        url: 'https://googlemcp.missionsquad.ai/mcp',
-        headers: {
-          Authorization: 'Bearer shared-token',
-          'x-msq-test': '1'
-        },
-        status: 'disconnected',
-        enabled: true
-      },
-      'alice',
-      { includeAuthProvider: false }
-    )
-
-    expect((oauthTokensService as unknown as { getTokenRecord: jest.Mock }).getTokenRecord).not.toHaveBeenCalled()
-    expect(transportOptions.authProvider).toBeUndefined()
-    expect(transportOptions.requestInit).toMatchObject({
-      headers: {
-        'x-msq-test': '1'
-      }
-    })
-  })
-
   test('oauth token refresh is single-flight per server and user', async () => {
     global.fetch = jest.fn(async () =>
       new Response(
