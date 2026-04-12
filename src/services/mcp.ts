@@ -2439,6 +2439,14 @@ export class MCPService implements Resource {
       sessionId = sessionRecord?.sessionId ?? undefined
     }
     const shouldPreferSessionResume = !!sessionId && !forceAuthProvider
+    oauthLogInfo(
+      `[oauth:${username}:${server.name}] Preparing user connection ${JSON.stringify({
+        hasPersistedSession: !!sessionId,
+        sessionResumePreferred: shouldPreferSessionResume,
+        forceAuthProvider,
+        transportUrl: server.url
+      })}`
+    )
 
     const transportErrorHandler = async (error: Error) => {
       log({ level: 'error', msg: `[${username}:${server.name}] transport error: ${error.message}`, error })
@@ -2495,11 +2503,25 @@ export class MCPService implements Resource {
       if (transport instanceof StreamableHTTPClientTransport) {
         await this.persistUserSessionId(server.name, username, transport)
       }
+      oauthLogInfo(
+        `[oauth:${username}:${server.name}] User connection established ${JSON.stringify({
+          connectedVia: shouldPreferSessionResume ? 'session_resume' : 'auth_provider',
+          hasPersistedSession: !!sessionId,
+          persistedSessionUpdated: transport instanceof StreamableHTTPClientTransport
+        })}`
+      )
       log({ level: 'info', msg: `[${username}:${server.name}] Connected successfully.` })
 
       return userConn
     } catch (error) {
       const httpStatus = extractHttpStatusFromError(error)
+      oauthLogInfo(
+        `[oauth:${username}:${server.name}] User connection attempt failed ${JSON.stringify({
+          httpStatus,
+          attemptedMode: shouldPreferSessionResume ? 'session_resume' : 'auth_provider',
+          hasPersistedSession: !!sessionId
+        })}`
+      )
 
       if (sessionId && shouldPreferSessionResume && allowSessionRetry && httpStatus === 401) {
         log({
