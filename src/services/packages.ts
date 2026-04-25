@@ -1,4 +1,4 @@
-import { MCPService, MCPServer, MCPTransportType, assertTransportConfigCompatible } from './mcp'
+import { MCPService, MCPServer, MCPTransportType, assertTransportConfigCompatible, type AddServerInput } from './mcp'
 import { IndexDefinition, MongoConnectionParams, MongoDBClient } from '../utils/mongodb'
 import { log, compareVersions } from '../utils/general'
 import { env } from '../env'
@@ -36,7 +36,22 @@ export interface PackageInfo {
   pipDependencies?: string[]
 }
 
-export interface InstallPackageRequest {
+type PackageInstallServerMetadata = Pick<
+  AddServerInput,
+  | 'displayName'
+  | 'description'
+  | 'secretName'
+  | 'secretNames'
+  | 'secretFields'
+  | 'homepageUrl'
+  | 'repositoryUrl'
+  | 'licenseName'
+  | 'catalogProvider'
+  | 'catalogId'
+  | 'startupTimeout'
+>
+
+export interface InstallPackageRequest extends PackageInstallServerMetadata {
   name: string
   version?: string
   serverName: string
@@ -47,7 +62,6 @@ export interface InstallPackageRequest {
   url?: string
   headers?: Record<string, string>
   reconnectionOptions?: StreamableHTTPReconnectionOptions
-  secretName?: string
   enabled?: boolean
   failOnWarning?: boolean
   runtime?: PackageRuntime
@@ -117,6 +131,22 @@ export class PackageService {
     const binDir = this.venvBinDir()
     const exeName = process.platform === 'win32' ? 'pip.exe' : 'pip'
     return path.join(venvAbsolutePath, binDir, exeName)
+  }
+
+  private buildServerMetadataInput(request: InstallPackageRequest): PackageInstallServerMetadata {
+    return {
+      displayName: request.displayName,
+      description: request.description,
+      secretName: request.secretName,
+      secretNames: request.secretNames,
+      secretFields: request.secretFields,
+      homepageUrl: request.homepageUrl,
+      repositoryUrl: request.repositoryUrl,
+      licenseName: request.licenseName,
+      catalogProvider: request.catalogProvider,
+      catalogId: request.catalogId,
+      startupTimeout: request.startupTimeout
+    }
   }
 
   private async ensureVenv(pythonExecutable: string, venvAbsolutePath: string): Promise<void> {
@@ -298,12 +328,12 @@ export class PackageService {
       url,
       headers,
       reconnectionOptions,
-      secretName,
       enabled = true,
       failOnWarning = false
     } = request
     const resolvedTransportType: MCPTransportType = transportType ?? 'stdio'
     const runtime: PackageRuntime = request.runtime ?? 'node'
+    const serverMetadata = this.buildServerMetadataInput(request)
 
     if (runtime === 'python') {
       if (!request.pythonModule) {
@@ -364,7 +394,7 @@ export class PackageService {
           command: pythonCommand,
           args: pythonArgs,
           env: pythonEnv,
-          secretName,
+          ...serverMetadata,
           enabled
         })
 
@@ -483,7 +513,7 @@ export class PackageService {
           url: url!,
           headers,
           reconnectionOptions,
-          secretName,
+          ...serverMetadata,
           enabled
         })
       } else {
@@ -546,7 +576,7 @@ export class PackageService {
           command: finalCommand,
           args: stdioArgs,
           env: stdioEnv,
-          secretName,
+          ...serverMetadata,
           enabled
         })
       }
