@@ -157,7 +157,25 @@ describe('PackageService python runtime support', () => {
       runtime: 'python',
       pythonModule: 'my_mcp_server',
       pythonArgs: ['--port', '0'],
-      env: { PATH: '/usr/bin', CUSTOM_ENV: '1' }
+      env: { PATH: '/usr/bin', CUSTOM_ENV: '1' },
+      displayName: 'Python Server',
+      description: 'Python MCP test server',
+      secretNames: ['apiKey'],
+      secretFields: [
+        {
+          name: 'apiKey',
+          label: 'API key',
+          description: 'API key used by the package.',
+          required: true,
+          inputType: 'password'
+        }
+      ],
+      homepageUrl: 'https://example.com/python-server',
+      repositoryUrl: 'https://github.com/example/python-server',
+      licenseName: 'MIT',
+      catalogProvider: 'manual',
+      catalogId: 'python-server',
+      startupTimeout: 600000
     })
 
     expect(result.success).toBe(true)
@@ -173,6 +191,16 @@ describe('PackageService python runtime support', () => {
       command: string
       args: string[]
       env: Record<string, string>
+      displayName: string
+      description: string
+      secretNames: string[]
+      secretFields: Array<{ name: string; label: string; description: string; required: boolean; inputType: string }>
+      homepageUrl: string
+      repositoryUrl: string
+      licenseName: string
+      catalogProvider: string
+      catalogId: string
+      startupTimeout: number
     }
     const expectedVenvAbsolutePath = path.resolve(process.cwd(), path.join('packages/python', 'python-server'))
     const expectedPythonCommand = path.join(
@@ -190,6 +218,133 @@ describe('PackageService python runtime support', () => {
         path.join(expectedVenvAbsolutePath, process.platform === 'win32' ? 'Scripts' : 'bin')
       )
     ).toBe(true)
+    expect(addServerInput.displayName).toBe('Python Server')
+    expect(addServerInput.description).toBe('Python MCP test server')
+    expect(addServerInput.secretNames).toEqual(['apiKey'])
+    expect(addServerInput.secretFields).toEqual([
+      {
+        name: 'apiKey',
+        label: 'API key',
+        description: 'API key used by the package.',
+        required: true,
+        inputType: 'password'
+      }
+    ])
+    expect(addServerInput.homepageUrl).toBe('https://example.com/python-server')
+    expect(addServerInput.repositoryUrl).toBe('https://github.com/example/python-server')
+    expect(addServerInput.licenseName).toBe('MIT')
+    expect(addServerInput.catalogProvider).toBe('manual')
+    expect(addServerInput.catalogId).toBe('python-server')
+    expect(addServerInput.startupTimeout).toBe(600000)
+  })
+
+  test('installPackage forwards server metadata for node stdio packages', async () => {
+    const { service, mcpMock } = createService()
+
+    mcpMock.addServer.mockResolvedValue({
+      name: 'node-server',
+      transportType: 'stdio',
+      command: 'node',
+      args: [],
+      env: {},
+      status: 'disconnected',
+      enabled: true
+    })
+
+    const result = await service.installPackage({
+      name: '@example/node-mcp',
+      serverName: 'node-server',
+      command: 'node',
+      args: ['./server.js'],
+      secretNames: ['token'],
+      secretFields: [
+        {
+          name: 'token',
+          label: 'Token',
+          description: 'Token used by the package.',
+          required: true,
+          inputType: 'password'
+        }
+      ],
+      homepageUrl: 'https://example.com/node-mcp',
+      repositoryUrl: 'https://github.com/example/node-mcp',
+      startupTimeout: 300000
+    })
+
+    expect(result.success).toBe(true)
+    expect(mcpMock.addServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'node-server',
+        transportType: 'stdio',
+        command: 'node',
+        args: ['./server.js'],
+        secretNames: ['token'],
+        secretFields: [
+          {
+            name: 'token',
+            label: 'Token',
+            description: 'Token used by the package.',
+            required: true,
+            inputType: 'password'
+          }
+        ],
+        homepageUrl: 'https://example.com/node-mcp',
+        repositoryUrl: 'https://github.com/example/node-mcp',
+        startupTimeout: 300000
+      })
+    )
+  })
+
+  test('installPackage forwards server metadata for streamable HTTP packages', async () => {
+    const { service, mcpMock } = createService()
+
+    mcpMock.addServer.mockResolvedValue({
+      name: 'remote-server',
+      transportType: 'streamable_http',
+      url: 'https://mcp.example.com/mcp',
+      status: 'disconnected',
+      enabled: true
+    })
+
+    const result = await service.installPackage({
+      name: '@example/remote-mcp',
+      serverName: 'remote-server',
+      transportType: 'streamable_http',
+      url: 'https://mcp.example.com/mcp',
+      displayName: 'Remote MCP',
+      secretNames: ['bearerToken'],
+      secretFields: [
+        {
+          name: 'bearerToken',
+          label: 'Bearer token',
+          description: 'Bearer token used by the package.',
+          required: true,
+          inputType: 'password'
+        }
+      ],
+      startupTimeout: 900000
+    })
+
+    expect(result.success).toBe(true)
+    expect(mcpMock.addServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'remote-server',
+        transportType: 'streamable_http',
+        url: 'https://mcp.example.com/mcp',
+        displayName: 'Remote MCP',
+        secretNames: ['bearerToken'],
+        secretFields: [
+          {
+            name: 'bearerToken',
+            label: 'Bearer token',
+            description: 'Bearer token used by the package.',
+            required: true,
+            inputType: 'password'
+          }
+        ],
+        startupTimeout: 900000
+      })
+    )
   })
 
   test('upgradePackage uses pip for python runtime and does not update server command/args', async () => {
