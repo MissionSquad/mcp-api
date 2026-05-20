@@ -25,6 +25,7 @@ import {
 import { McpOAuthClientProvider, McpOAuthTokens } from '../src/services/oauthTokens'
 import { resolveInitialUserInstallAuthState } from '../src/services/userServerInstalls'
 import { resolvePreferredTokenEndpointAuthMethod } from '../src/services/dcrClients'
+import { validateExternalMcpUrl } from '../src/utils/ssrf'
 
 const originalFetch = global.fetch
 
@@ -185,6 +186,38 @@ describe('external MCP request validation', () => {
     expect(
       shouldFallbackToSse(new StreamableHTTPError(-1, 'Unexpected content type: text/html; charset=utf-8'))
     ).toBe(true)
+  })
+
+  test('rejects external MCP hostnames that resolve to private IPs by default', async () => {
+    const lookupSpy = jest.spyOn(dns, 'lookup').mockImplementation(async () =>
+      [{ address: '10.1.253.40', family: 4 }] as any
+    )
+
+    await expect(validateExternalMcpUrl('https://googlemcp.missionsquad.ai/mcp')).rejects.toThrow(
+      'Blocked private or local IPv4 address: 10.1.253.40'
+    )
+
+    lookupSpy.mockRestore()
+  })
+
+  test('allows trusted MCP hostnames that resolve to private IPs when explicitly allowlisted', async () => {
+    const previousAllowlist = process.env.EXTERNAL_MCP_PRIVATE_HOST_ALLOWLIST
+    process.env.EXTERNAL_MCP_PRIVATE_HOST_ALLOWLIST = 'googlemcp.missionsquad.ai'
+    const lookupSpy = jest.spyOn(dns, 'lookup').mockImplementation(async () =>
+      [{ address: '10.1.253.40', family: 4 }] as any
+    )
+
+    await expect(validateExternalMcpUrl('https://googlemcp.missionsquad.ai/mcp')).resolves.toMatchObject({
+      hostname: 'googlemcp.missionsquad.ai',
+      pathname: '/mcp'
+    })
+
+    if (previousAllowlist === undefined) {
+      delete process.env.EXTERNAL_MCP_PRIVATE_HOST_ALLOWLIST
+    } else {
+      process.env.EXTERNAL_MCP_PRIVATE_HOST_ALLOWLIST = previousAllowlist
+    }
+    lookupSpy.mockRestore()
   })
 
   test('rejects reserved OAuth authorization request params on external OAuth templates', () => {
@@ -368,6 +401,49 @@ describe('external MCP error contract', () => {
       username: 'alice',
       tokenEndpoint: 'https://example.com/oauth/token',
       resource: 'https://oauth.example.com/resource'
+    })
+  })
+
+  test('google-workspace maps unsupported refresh grants to reauth-required', async () => {
+    const expiredRecord = {
+      serverName: 'google-workspace',
+      username: 'alice',
+      tokenType: 'Bearer',
+      accessToken: 'expired-access',
+      refreshToken: 'refresh-token',
+      clientId: 'client-id',
+      redirectUri: 'https://missionsquad.example/callback',
+      tokenEndpointAuthMethod: 'none' as const,
+      registrationMode: 'cimd' as const,
+      expiresAt: new Date(Date.now() - 60_000),
+      scopes: ['openid'],
+      createdAt: new Date('2026-03-13T00:00:00.000Z'),
+      updatedAt: new Date('2026-03-13T00:00:00.000Z')
+    }
+    const tokenStore = {
+      getTokenRecord: jest.fn().mockResolvedValue(expiredRecord),
+      refreshTokenRecord: jest.fn().mockRejectedValue(
+        new Error("OAuth token refresh failed: unsupported_grant_type Unsupported grant type (supported grant types are ['authorization_code'])")
+      )
+    } as unknown as McpOAuthTokens
+
+    const provider = new McpOAuthClientProvider({
+      serverName: 'google-workspace',
+      username: 'alice',
+      tokenStore,
+      record: expiredRecord,
+      tokenEndpoint: 'https://googlemcp.missionsquad.ai/token',
+      resource: 'https://googlemcp.missionsquad.ai/mcp'
+    })
+
+    await expect(provider.tokens()).rejects.toMatchObject({
+      code: 'reauth_required',
+      statusCode: 401,
+      details: {
+        reauthRequired: true,
+        serverName: 'google-workspace',
+        username: 'alice'
+      }
     })
   })
 
