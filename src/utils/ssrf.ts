@@ -52,6 +52,22 @@ function assertSafeIp(address: string): void {
   }
 }
 
+function getTrustedPrivateHostnameAllowlist(): string[] {
+  return (process.env.EXTERNAL_MCP_PRIVATE_HOST_ALLOWLIST ?? '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry) => entry.length > 0)
+}
+
+function isHostnameAllowlisted(hostname: string, allowlist: string[]): boolean {
+  return allowlist.some((entry) => {
+    if (entry.startsWith('.')) {
+      return hostname.endsWith(entry)
+    }
+    return hostname === entry
+  })
+}
+
 export async function validateExternalMcpUrl(urlString: string): Promise<URL> {
   let parsed: URL
   try {
@@ -83,11 +99,15 @@ export async function validateExternalMcpUrl(urlString: string): Promise<URL> {
     return parsed
   }
 
+  const trustedPrivateHostnameAllowlist = getTrustedPrivateHostnameAllowlist()
+  const allowlistedHostname = isHostnameAllowlisted(hostname, trustedPrivateHostnameAllowlist)
   const resolved = await dns.lookup(hostname, { all: true, verbatim: true })
   if (resolved.length === 0) {
     throw new McpValidationError(`Unable to resolve external MCP hostname: ${hostname}`)
   }
 
-  resolved.forEach(({ address }) => assertSafeIp(address))
+  if (!allowlistedHostname) {
+    resolved.forEach(({ address }) => assertSafeIp(address))
+  }
   return parsed
 }

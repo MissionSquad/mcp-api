@@ -114,6 +114,7 @@ const oauthLifecycleInfo = (msg: string): void => {
 }
 
 const ACCESS_TOKEN_EXPIRY_SKEW_MS = 30_000
+const OAUTH_REFRESH_UNSUPPORTED_GRANT_REAUTH_SERVER_NAMES = new Set(['google-workspace'])
 
 export class McpOAuthTokens {
   private encryptor: SecretEncryptor
@@ -583,6 +584,16 @@ export class McpOAuthClientProvider implements OAuthClientProvider {
           tokenEndpoint: summarizeUrlForLog(this.tokenEndpoint),
           resource: summarizeUrlForLog(this.resource)
         })}`)
+      if (
+        OAUTH_REFRESH_UNSUPPORTED_GRANT_REAUTH_SERVER_NAMES.has(this.serverName) &&
+        /unsupported_grant_type/i.test(message)
+      ) {
+        throw new McpReauthRequiredError({
+          serverName: this.serverName,
+          username: this.username,
+          message: 'This OAuth provider does not support client-side refresh_token renewal. Reconnect the server.'
+        })
+      }
       if (/invalid_grant|invalid_token/i.test(message)) {
         throw new McpReauthRequiredError({
           serverName: this.serverName,
