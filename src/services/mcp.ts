@@ -23,6 +23,7 @@ import {
   ExternalOAuthProvisioningContext,
   McpDcrClients,
   SupportedTokenEndpointAuthMethod,
+  assertSafeDcrRegistrationEndpoint,
   normalizeTokenEndpointAuthMethods
 } from './dcrClients'
 import {
@@ -1949,6 +1950,11 @@ export class MCPService implements Resource {
     }
 
     this.validateExternalOAuthTemplate(authMode, normalizedTemplate, transportUrl)
+
+    if (normalizedTemplate.registrationEndpoint) {
+      await assertSafeDcrRegistrationEndpoint(normalizedTemplate.registrationEndpoint)
+    }
+
     return normalizedTemplate
   }
 

@@ -24,7 +24,11 @@ import {
 } from '../src/services/mcpErrors'
 import { McpOAuthClientProvider, McpOAuthTokens } from '../src/services/oauthTokens'
 import { resolveInitialUserInstallAuthState } from '../src/services/userServerInstalls'
-import { resolvePreferredTokenEndpointAuthMethod } from '../src/services/dcrClients'
+import {
+  McpDcrClients,
+  assertSafeDcrRegistrationEndpoint,
+  resolvePreferredTokenEndpointAuthMethod
+} from '../src/services/dcrClients'
 import { validateExternalMcpUrl } from '../src/utils/ssrf'
 
 const originalFetch = global.fetch
@@ -220,6 +224,99 @@ describe('external MCP request validation', () => {
     lookupSpy.mockRestore()
   })
 
+  test.each([
+    ['javascript:alert(1)'],
+    ['file:///etc/passwd'],
+    ['data:text/html,<script>alert(1)</script>'],
+    ['ftp://example.com/foo'],
+    ['gopher://example.com/_GET'],
+    ['ws://example.com/socket'],
+    ['wss://example.com/socket']
+  ])('validateExternalMcpUrl rejects non-http(s) scheme %s', async (urlString) => {
+    await expect(validateExternalMcpUrl(urlString)).rejects.toThrow(
+      'External MCP server url must use http or https'
+    )
+  })
+
+  test.each([
+    [''],
+    ['   '],
+    ['/relative/path'],
+    ['not-a-url'],
+    ['http://']
+  ])('validateExternalMcpUrl rejects malformed url %p', async (urlString) => {
+    await expect(validateExternalMcpUrl(urlString)).rejects.toThrow(
+      /must be a valid URL|hostname is required/
+    )
+  })
+
+  test.each([
+    ['javascript:alert(1)'],
+    ['file:///etc/passwd'],
+    ['data:text/html,evil'],
+    [''],
+    ['/relative/path']
+  ])('assertSafeDcrRegistrationEndpoint propagates rejection for unsafe input %p', async (urlString) => {
+    await expect(assertSafeDcrRegistrationEndpoint(urlString)).rejects.toThrow(
+      /oauthTemplate\.registrationEndpoint failed SSRF validation/
+    )
+  })
+
+  test('persistence normalization rejects non-http(s) DCR registrationEndpoint schemes', async () => {
+    const service = new MCPService({
+      mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' },
+      secretsService: {} as never,
+      userServerInstalls: {} as never
+    })
+
+    await expect(
+      (service as any).normalizeExternalOAuthTemplateForPersistence(
+        'oauth2',
+        'https://mcp.example.com/v1/mcp',
+        {
+          authorizationServerIssuer: 'https://auth.example.com',
+          authorizationServerMetadataUrl: 'https://auth.example.com/.well-known/oauth-authorization-server',
+          resourceUri: 'https://mcp.example.com/v1/mcp',
+          authorizationEndpoint: 'https://auth.example.com/authorize',
+          tokenEndpoint: 'https://auth.example.com/token',
+          codeChallengeMethodsSupported: ['S256'],
+          pkceRequired: true,
+          discoveryMode: 'auto',
+          discoverySource: 'issuer_override',
+          registrationMode: 'dcr',
+          registrationEndpoint: 'file:///etc/passwd',
+          tokenEndpointAuthMethodsSupported: ['client_secret_basic']
+        }
+      )
+    ).rejects.toThrow(/oauthTemplate\.registrationEndpoint failed SSRF validation.*http or https/)
+  })
+
+  test('dcrClients.registerNewClient blocks non-http(s) registrationEndpoint schemes before issuing fetch', async () => {
+    const fetchSpy = jest.fn()
+    global.fetch = fetchSpy as unknown as typeof global.fetch
+
+    const dcrClients = new McpDcrClients({
+      mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' }
+    })
+
+    await expect(
+      (dcrClients as any).registerNewClient({
+        issuer: 'https://auth.example.com',
+        registrationEndpoint: 'javascript:fetch("http://attacker.example/")',
+        tokenEndpointAuthMethodsSupported: ['client_secret_basic'],
+        oauthProvisioningContext: {
+          publicApiOrigin: 'https://missionsquad.example',
+          redirectUri: 'https://missionsquad.example/callback',
+          clientMetadataUrl: '',
+          clientName: 'MissionSquad'
+        }
+      })
+    ).rejects.toThrow(/oauthTemplate\.registrationEndpoint failed SSRF validation.*http or https/)
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+    global.fetch = originalFetch
+  })
+
   test('rejects reserved OAuth authorization request params on external OAuth templates', () => {
     const service = new MCPService({
       mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' },
@@ -282,6 +379,194 @@ describe('external MCP request validation', () => {
         { name: 'prompt', value: 'consent' }
       ]
     })
+  })
+
+  test('persistence normalization rejects DCR registrationEndpoint pointed at a loopback IP', async () => {
+    const service = new MCPService({
+      mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' },
+      secretsService: {} as never,
+      userServerInstalls: {} as never
+    })
+
+    await expect(
+      (service as any).normalizeExternalOAuthTemplateForPersistence(
+        'oauth2',
+        'https://mcp.example.com/v1/mcp',
+        {
+          authorizationServerIssuer: 'https://auth.example.com',
+          authorizationServerMetadataUrl: 'https://auth.example.com/.well-known/oauth-authorization-server',
+          resourceUri: 'https://mcp.example.com/v1/mcp',
+          authorizationEndpoint: 'https://auth.example.com/authorize',
+          tokenEndpoint: 'https://auth.example.com/token',
+          codeChallengeMethodsSupported: ['S256'],
+          pkceRequired: true,
+          discoveryMode: 'auto',
+          discoverySource: 'issuer_override',
+          registrationMode: 'dcr',
+          registrationEndpoint: 'http://127.0.0.1:8080/register',
+          tokenEndpointAuthMethodsSupported: ['client_secret_basic']
+        }
+      )
+    ).rejects.toThrow(/registrationEndpoint.*127\.0\.0\.1|Blocked private or local IPv4 address: 127\.0\.0\.1/)
+  })
+
+  test('persistence normalization rejects DCR registrationEndpoint hostnames that resolve to private IPs', async () => {
+    const lookupSpy = jest.spyOn(dns, 'lookup').mockImplementation(async (hostname: string) => {
+      if (hostname === 'attacker.internal') {
+        return [{ address: '10.0.0.5', family: 4 }] as any
+      }
+      return [{ address: '93.184.216.34', family: 4 }] as any
+    })
+
+    const service = new MCPService({
+      mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' },
+      secretsService: {} as never,
+      userServerInstalls: {} as never
+    })
+
+    await expect(
+      (service as any).normalizeExternalOAuthTemplateForPersistence(
+        'oauth2',
+        'https://mcp.example.com/v1/mcp',
+        {
+          authorizationServerIssuer: 'https://auth.example.com',
+          authorizationServerMetadataUrl: 'https://auth.example.com/.well-known/oauth-authorization-server',
+          resourceUri: 'https://mcp.example.com/v1/mcp',
+          authorizationEndpoint: 'https://auth.example.com/authorize',
+          tokenEndpoint: 'https://auth.example.com/token',
+          codeChallengeMethodsSupported: ['S256'],
+          pkceRequired: true,
+          discoveryMode: 'auto',
+          discoverySource: 'issuer_override',
+          registrationMode: 'dcr',
+          registrationEndpoint: 'https://attacker.internal/register',
+          tokenEndpointAuthMethodsSupported: ['client_secret_basic']
+        }
+      )
+    ).rejects.toThrow(/registrationEndpoint.*10\.0\.0\.5|Blocked private or local IPv4 address: 10\.0\.0\.5/)
+
+    lookupSpy.mockRestore()
+  })
+
+  test('persistence normalization rejects manual-mode templates that still set an unsafe registrationEndpoint', async () => {
+    const service = new MCPService({
+      mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' },
+      secretsService: {} as never,
+      userServerInstalls: {} as never
+    })
+
+    await expect(
+      (service as any).normalizeExternalOAuthTemplateForPersistence(
+        'oauth2',
+        'https://mcp.example.com/v1/mcp',
+        {
+          authorizationServerIssuer: '',
+          authorizationServerMetadataUrl: '',
+          resourceMetadataUrl: '',
+          resourceUri: 'https://mcp.example.com/v1/mcp',
+          authorizationEndpoint: 'https://auth.example.com/authorize',
+          tokenEndpoint: 'https://auth.example.com/token',
+          codeChallengeMethodsSupported: ['S256'],
+          pkceRequired: true,
+          discoveryMode: 'manual',
+          registrationMode: 'manual',
+          registrationEndpoint: 'http://127.0.0.1/register'
+        }
+      )
+    ).rejects.toThrow(/registrationEndpoint.*127\.0\.0\.1|Blocked private or local IPv4 address: 127\.0\.0\.1/)
+  })
+
+  test('persistence normalization accepts public-resolved DCR registrationEndpoint', async () => {
+    const lookupSpy = jest.spyOn(dns, 'lookup').mockImplementation(async () =>
+      [{ address: '93.184.216.34', family: 4 }] as any
+    )
+
+    const service = new MCPService({
+      mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' },
+      secretsService: {} as never,
+      userServerInstalls: {} as never
+    })
+
+    await expect(
+      (service as any).normalizeExternalOAuthTemplateForPersistence(
+        'oauth2',
+        'https://mcp.example.com/v1/mcp',
+        {
+          authorizationServerIssuer: 'https://auth.example.com',
+          authorizationServerMetadataUrl: 'https://auth.example.com/.well-known/oauth-authorization-server',
+          resourceUri: 'https://mcp.example.com/v1/mcp',
+          authorizationEndpoint: 'https://auth.example.com/authorize',
+          tokenEndpoint: 'https://auth.example.com/token',
+          codeChallengeMethodsSupported: ['S256'],
+          pkceRequired: true,
+          discoveryMode: 'auto',
+          discoverySource: 'issuer_override',
+          registrationMode: 'dcr',
+          registrationEndpoint: 'https://auth.example.com/register',
+          tokenEndpointAuthMethodsSupported: ['client_secret_basic']
+        }
+      )
+    ).resolves.toMatchObject({
+      registrationEndpoint: 'https://auth.example.com/register'
+    })
+
+    lookupSpy.mockRestore()
+  })
+
+  test('dcrClients.registerNewClient blocks loopback registration endpoints before issuing fetch', async () => {
+    const fetchSpy = jest.fn()
+    global.fetch = fetchSpy as unknown as typeof global.fetch
+
+    const dcrClients = new McpDcrClients({
+      mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' }
+    })
+
+    await expect(
+      (dcrClients as any).registerNewClient({
+        issuer: 'https://auth.example.com',
+        registrationEndpoint: 'http://127.0.0.1:8080/register',
+        tokenEndpointAuthMethodsSupported: ['client_secret_basic'],
+        oauthProvisioningContext: {
+          publicApiOrigin: 'https://missionsquad.example',
+          redirectUri: 'https://missionsquad.example/callback',
+          clientMetadataUrl: '',
+          clientName: 'MissionSquad'
+        }
+      })
+    ).rejects.toThrow(/Blocked private or local IPv4 address: 127\.0\.0\.1|registrationEndpoint/)
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+    global.fetch = originalFetch
+  })
+
+  test('dcrClients.registerNewClient blocks hostnames that resolve to private IPs before issuing fetch', async () => {
+    const lookupSpy = jest.spyOn(dns, 'lookup').mockImplementation(async () =>
+      [{ address: '169.254.169.254', family: 4 }] as any
+    )
+    const fetchSpy = jest.fn()
+    global.fetch = fetchSpy as unknown as typeof global.fetch
+
+    const dcrClients = new McpDcrClients({
+      mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' }
+    })
+
+    await expect(
+      (dcrClients as any).registerNewClient({
+        issuer: 'https://auth.example.com',
+        registrationEndpoint: 'http://metadata.internal/register',
+        tokenEndpointAuthMethodsSupported: ['client_secret_basic'],
+        oauthProvisioningContext: {
+          publicApiOrigin: 'https://missionsquad.example',
+          redirectUri: 'https://missionsquad.example/callback',
+          clientMetadataUrl: '',
+          clientName: 'MissionSquad'
+        }
+      })
+    ).rejects.toThrow(/Blocked private or local IPv4 address: 169\.254\.169\.254|registrationEndpoint/)
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+    lookupSpy.mockRestore()
+    global.fetch = originalFetch
   })
 })
 
