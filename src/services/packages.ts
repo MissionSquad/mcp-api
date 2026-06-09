@@ -96,10 +96,31 @@ export class PackageService {
     return serverName.replace(/[^a-zA-Z0-9_-]/g, '-')
   }
 
-  // Strict allowlist for npm version/range/tag specs.
-  // Disallows shell metacharacters and rejects leading `-` (which npm would
-  // interpret as a flag) as defense-in-depth on top of execFile-based spawning.
+  // Strict allowlist for npm package names. Mirrors the legal character set
+  // for both scoped (`@scope/name`) and unscoped names. Rejects leading
+  // `-`/`.`/`_` (npm itself disallows these, and a leading `-` would also
+  // be interpreted as a CLI flag), and disallows every shell metacharacter,
+  // so a name can never become an injection vector on any platform.
+  private static readonly NPM_NAME_RE = /^(?![-._])[@a-z0-9._\-/]+$/
+
+  // Strict allowlist for npm version/range/tag specs. Permits the characters
+  // that appear in legitimate npm semver ranges (`^1.2.3`, `~1.0.0`,
+  // `>=1.0.0`, `1.x`, `*`, `latest`, etc.) and rejects leading `-`.
+  // NOTE: a few of these characters (`^`, `<`, `>`, `|`) ARE cmd.exe shell
+  // metacharacters. They cannot be interpreted as such here because
+  // `runNpm()` invokes npm via `execFile` with `shell: false` whenever
+  // possible (see `resolveNpmInvocation`). When the Windows fallback path
+  // with `shell: true` is taken, Node.js v18.20+/20.12+/22+ applies the
+  // CVE-2024-27980 fix to escape cmd.exe metacharacters in arguments
+  // passed to `.cmd`/`.bat` files.
   private static readonly NPM_VERSION_SPEC_RE = /^(?!-)[A-Za-z0-9.\-+~^<>=|*x_]+$/
+
+  private static isValidNpmName(name: string): boolean {
+    if (typeof name !== 'string' || name.length === 0 || name.length > 214) {
+      return false
+    }
+    return PackageService.NPM_NAME_RE.test(name)
+  }
 
   private static isValidNpmVersionSpec(version: string): boolean {
     if (typeof version !== 'string' || version.length === 0 || version.length > 256) {
@@ -108,20 +129,57 @@ export class PackageService {
     return PackageService.NPM_VERSION_SPEC_RE.test(version)
   }
 
-  private resolveNpmCommand(): string {
-    return process.platform === 'win32' ? 'npm.cmd' : 'npm'
+  // Lazily-resolved absolute path to npm's CLI entry script
+  // (`.../node_modules/npm/bin/npm-cli.js`). When resolvable, npm is invoked
+  // via `node + npm-cli.js`, which bypasses npm's `.cmd` shim on Windows and
+  // lets us run with `shell: false` everywhere. `undefined` = not yet probed,
+  // `null` = probed and not found.
+  private resolvedNpmCliPath: string | null | undefined = undefined
+
+  private findNpmCliPath(): string | null {
+    if (this.resolvedNpmCliPath !== undefined) {
+      return this.resolvedNpmCliPath
+    }
+    const nodeDir = path.dirname(process.execPath)
+    const candidates = [
+      // Unix layouts (node at /usr/bin/node, /usr/local/bin/node, nvm install)
+      path.join(nodeDir, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+      // Windows layout (node at C:\Program Files\nodejs\node.exe)
+      path.join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    ]
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) {
+        this.resolvedNpmCliPath = candidate
+        return candidate
+      }
+    }
+    this.resolvedNpmCliPath = null
+    return null
+  }
+
+  private resolveNpmInvocation(): { command: string; prefixArgs: string[]; useShell: boolean } {
+    const cliPath = this.findNpmCliPath()
+    if (cliPath) {
+      // Prefer `node + npm-cli.js` — no shell required on any platform, so
+      // shell metacharacters in arguments are impossible to interpret.
+      return { command: process.execPath, prefixArgs: [cliPath], useShell: false }
+    }
+    if (process.platform === 'win32') {
+      // Fallback: spawning `npm.cmd` requires `shell: true` per Node.js's
+      // CVE-2024-27980 mitigation. Node.js v18.20+/20.12+/22+ applies
+      // cmd.exe argument escaping when spawning `.cmd`/`.bat` files via
+      // the shell, neutralising metacharacters in the version spec.
+      return { command: 'npm.cmd', prefixArgs: [], useShell: true }
+    }
+    return { command: 'npm', prefixArgs: [], useShell: false }
   }
 
   private async runNpm(
     args: string[],
     options: { cwd?: string } = {}
   ): Promise<{ stdout: string; stderr: string }> {
-    const command = this.resolveNpmCommand()
-    // `shell: true` is required on Windows to run `npm.cmd`. All caller-controlled
-    // values reaching this method are validated against a strict allowlist
-    // (package name + version spec), so shell metacharacters cannot appear here.
-    const useShell = process.platform === 'win32'
-    return execFile(command, args, { cwd: options.cwd, shell: useShell })
+    const { command, prefixArgs, useShell } = this.resolveNpmInvocation()
+    return execFile(command, [...prefixArgs, ...args], { cwd: options.cwd, shell: useShell })
   }
 
   private async resolvePythonExecutable(): Promise<string> {
@@ -448,8 +506,11 @@ export class PackageService {
       reconnectionOptions
     })
 
-    // Validate package name to prevent command injection
-    if (!/^[@a-z0-9-_\/\.]+$/.test(name)) {
+    // Validate package name to prevent command injection. The same allowlist
+    // is reused by `upgradePackage` and `checkForUpdates` so that names
+    // round-tripped through the database can never become an injection
+    // vector when passed back to npm.
+    if (!PackageService.isValidNpmName(name)) {
       return {
         success: false,
         error: `Invalid package name: ${name}. Package names must match npm naming conventions.`
@@ -767,6 +828,24 @@ export class PackageService {
           // Skip packages without mcpServerId
           if (!pkg.mcpServerId) continue
 
+          // Skip packages whose stored name would fail the strict allowlist.
+          // `pkg.name` originates from the install-time request and is
+          // re-validated here as defense-in-depth before it reaches the
+          // npm subprocess.
+          if (!PackageService.isValidNpmName(pkg.name)) {
+            log({
+              level: 'warn',
+              msg: `Skipping update check for package with invalid name: ${pkg.name}`
+            })
+            updates.push({
+              serverName: pkg.mcpServerId,
+              currentVersion: pkg.version,
+              latestVersion: 'unknown',
+              updateAvailable: false
+            })
+            continue
+          }
+
           if (pkg.runtime === 'python') {
             const venvAbsolutePath = pkg.venvPath
               ? path.resolve(process.cwd(), pkg.venvPath)
@@ -856,6 +935,17 @@ export class PackageService {
       const packageInfo = await this.packagesDBClient.findOne({ mcpServerId: serverName })
       if (!packageInfo) {
         return { success: false, error: `Package ${serverName} not found` }
+      }
+
+      // Re-validate the persisted package name. Although names are validated
+      // at install time, defending the npm invocation here makes the upgrade
+      // path safe even if a record predates the install-time check or was
+      // written through some other path.
+      if (!PackageService.isValidNpmName(packageInfo.name)) {
+        return {
+          success: false,
+          error: `Invalid package name on existing record: ${packageInfo.name}.`
+        }
       }
 
       // Update status to upgrading

