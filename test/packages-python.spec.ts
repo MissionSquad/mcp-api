@@ -441,19 +441,20 @@ describe('PackageService python runtime support', () => {
     ])
 
     execFilePromisifiedMock.mockImplementation(async (...args: unknown[]) => {
+      const command = args[0] as string
       const commandArgs = (args[1] as string[]) ?? []
       if (commandArgs[0] === 'index' && commandArgs[1] === 'versions') {
         return { stdout: 'Available versions: 1.2.0, 1.1.0, 1.0.0\n', stderr: '' }
       }
-      throw new Error(`Unexpected execFile call in checkForUpdates: ${commandArgs.join(' ')}`)
-    })
-
-    execPromisifiedMock.mockImplementation(async (...args: unknown[]) => {
-      const command = args[0] as string
-      if (command.startsWith('npm view @missionsquad/mcp-github version')) {
+      if (
+        (command === 'npm' || command === 'npm.cmd') &&
+        commandArgs[0] === 'view' &&
+        commandArgs[1] === '@missionsquad/mcp-github' &&
+        commandArgs[2] === 'version'
+      ) {
         return { stdout: '1.1.0\n', stderr: '' }
       }
-      throw new Error(`Unexpected exec call: ${command}`)
+      throw new Error(`Unexpected execFile call in checkForUpdates: ${command} ${commandArgs.join(' ')}`)
     })
 
     const result = await service.checkForUpdates()
@@ -473,6 +474,5 @@ describe('PackageService python runtime support', () => {
       }
     ])
     expect(execFilePromisifiedMock).toHaveBeenCalled()
-    expect(execPromisifiedMock).toHaveBeenCalled()
   })
 })

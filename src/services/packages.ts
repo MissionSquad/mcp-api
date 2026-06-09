@@ -5,10 +5,9 @@ import { env } from '../env'
 import * as path from 'path'
 import { existsSync, mkdir, readFile, rm } from 'fs-extra'
 import { promisify } from 'util'
-import { exec as execCallback, execFile as execFileCallback } from 'child_process'
+import { execFile as execFileCallback } from 'child_process'
 import type { StreamableHTTPReconnectionOptions } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
-const exec = promisify(execCallback)
 const execFile = promisify(execFileCallback)
 
 export type PackageRuntime = 'node' | 'python'
@@ -95,6 +94,34 @@ export class PackageService {
 
   private sanitizeServerName(serverName: string): string {
     return serverName.replace(/[^a-zA-Z0-9_-]/g, '-')
+  }
+
+  // Strict allowlist for npm version/range/tag specs.
+  // Disallows shell metacharacters and rejects leading `-` (which npm would
+  // interpret as a flag) as defense-in-depth on top of execFile-based spawning.
+  private static readonly NPM_VERSION_SPEC_RE = /^(?!-)[A-Za-z0-9.\-+~^<>=|*x_]+$/
+
+  private static isValidNpmVersionSpec(version: string): boolean {
+    if (typeof version !== 'string' || version.length === 0 || version.length > 256) {
+      return false
+    }
+    return PackageService.NPM_VERSION_SPEC_RE.test(version)
+  }
+
+  private resolveNpmCommand(): string {
+    return process.platform === 'win32' ? 'npm.cmd' : 'npm'
+  }
+
+  private async runNpm(
+    args: string[],
+    options: { cwd?: string } = {}
+  ): Promise<{ stdout: string; stderr: string }> {
+    const command = this.resolveNpmCommand()
+    // `shell: true` is required on Windows to run `npm.cmd`. All caller-controlled
+    // values reaching this method are validated against a strict allowlist
+    // (package name + version spec), so shell metacharacters cannot appear here.
+    const useShell = process.platform === 'win32'
+    return execFile(command, args, { cwd: options.cwd, shell: useShell })
   }
 
   private async resolvePythonExecutable(): Promise<string> {
@@ -429,6 +456,15 @@ export class PackageService {
       }
     }
 
+    // Validate version against a strict npm semver/range/tag allowlist to prevent
+    // command injection. See PackageService.isValidNpmVersionSpec.
+    if (version !== undefined && !PackageService.isValidNpmVersionSpec(version)) {
+      return {
+        success: false,
+        error: `Invalid package version: ${version}. Version must be a valid npm semver, range, or tag.`
+      }
+    }
+
     if (resolvedTransportType === 'streamable_http') {
       if (!url) {
         return { success: false, error: 'Streamable HTTP servers require a url.' }
@@ -481,15 +517,16 @@ export class PackageService {
 
       // Initialize package.json
       log({ level: 'info', msg: `Initializing package.json for ${name}` })
-      const initResult = await exec('npm init -y', { cwd: packageDir })
+      const initResult = await this.runNpm(['init', '-y'], { cwd: packageDir })
       if (initResult.stderr) {
         log({ level: 'error', msg: `Error initializing package.json: ${initResult.stderr}` })
       }
 
-      // Install the package
-      const installCmd = `npm install ${name}${version ? '@' + version : ''}`
-      log({ level: 'info', msg: `Installing package: ${installCmd}` })
-      const installResult = await exec(installCmd, { cwd: packageDir })
+      // Install the package. Pass the package@version spec as a single argument
+      // to execFile-based runNpm so shell metacharacters can never be interpreted.
+      const installSpec = version ? `${name}@${version}` : name
+      log({ level: 'info', msg: `Installing package: npm install ${installSpec}` })
+      const installResult = await this.runNpm(['install', installSpec], { cwd: packageDir })
       if (
         installResult.stderr &&
         !installResult.stderr.includes('npm notice') &&
@@ -753,8 +790,8 @@ export class PackageService {
           }
 
           // Get the latest version from npm registry
-          const npmInfoCmd = `npm view ${pkg.name} version`
-          const { stdout } = await exec(npmInfoCmd, { cwd: process.cwd() })
+          log({ level: 'info', msg: `Checking npm registry for latest version of ${pkg.name}` })
+          const { stdout } = await this.runNpm(['view', pkg.name, 'version'], { cwd: process.cwd() })
           const latestVersion = stdout.trim()
 
           // Compare versions
@@ -805,6 +842,16 @@ export class PackageService {
     error?: string
   }> {
     try {
+      // Validate version against the same strict allowlist used for install,
+      // since this value is passed verbatim to npm. Without this check, a
+      // caller-controlled version would otherwise reach the npm command line.
+      if (version !== undefined && !PackageService.isValidNpmVersionSpec(version)) {
+        return {
+          success: false,
+          error: `Invalid package version: ${version}. Version must be a valid npm semver, range, or tag.`
+        }
+      }
+
       // Get package info
       const packageInfo = await this.packagesDBClient.findOne({ mcpServerId: serverName })
       if (!packageInfo) {
@@ -870,10 +917,11 @@ export class PackageService {
         // Get the absolute path to the package directory
         const packageDir = path.resolve(process.cwd(), packageInfo.installPath)
 
-        // Perform the upgrade
-        const upgradeCmd = `npm install ${packageInfo.name}${version ? '@' + version : '@latest'}`
-        log({ level: 'info', msg: `Upgrading package: ${upgradeCmd}` })
-        const upgradeResult = await exec(upgradeCmd, { cwd: packageDir })
+        // Perform the upgrade. Pass the package@version spec as a single argument
+        // to execFile-based runNpm so shell metacharacters can never be interpreted.
+        const upgradeSpec = `${packageInfo.name}@${version ?? 'latest'}`
+        log({ level: 'info', msg: `Upgrading package: npm install ${upgradeSpec}` })
+        const upgradeResult = await this.runNpm(['install', upgradeSpec], { cwd: packageDir })
 
         if (
           upgradeResult.stderr &&
