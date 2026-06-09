@@ -3,6 +3,7 @@ import { env } from '../env'
 import { log, sleep } from '../utils/general'
 import { IndexDefinition, MongoConnectionParams, MongoDBClient } from '../utils/mongodb'
 import { SecretEncryptor } from '../utils/secretEncryptor'
+import { validateExternalMcpUrl } from '../utils/ssrf'
 import { McpValidationError } from './mcpErrors'
 
 export type SupportedTokenEndpointAuthMethod = 'none' | 'client_secret_post' | 'client_secret_basic'
@@ -108,6 +109,19 @@ export const resolvePreferredTokenEndpointAuthMethod = (
   throw new McpValidationError(
     'Dynamic client registration requires one of these token endpoint auth methods: none, client_secret_post, client_secret_basic'
   )
+}
+
+export const assertSafeDcrRegistrationEndpoint = async (registrationEndpoint: string): Promise<void> => {
+  try {
+    await validateExternalMcpUrl(registrationEndpoint)
+  } catch (error) {
+    if (error instanceof McpValidationError) {
+      throw new McpValidationError(
+        `oauthTemplate.registrationEndpoint failed SSRF validation: ${error.message}`
+      )
+    }
+    throw error
+  }
 }
 
 const isClientSecretExpired = (record: McpDcrClientRegistrationRecord): boolean => {
@@ -250,6 +264,7 @@ export class McpDcrClients {
     tokenEndpointAuthMethodsSupported?: string[]
     oauthProvisioningContext: ExternalOAuthProvisioningContext
   }): Promise<McpDcrClientRegistrationRecord> {
+    await assertSafeDcrRegistrationEndpoint(input.registrationEndpoint)
     const tokenEndpointAuthMethod = resolvePreferredTokenEndpointAuthMethod(
       input.tokenEndpointAuthMethodsSupported
     )
