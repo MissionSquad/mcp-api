@@ -125,13 +125,19 @@ export class PackageService {
   // the pre-validation code treated any falsy version that way. Normalize
   // those inputs to `undefined` (and trim whitespace) BEFORE validating, so
   // the strict allowlist only ever rejects versions the caller actually set.
-  private static normalizeVersionInput(version: unknown): string | undefined {
+  // Non-string types are NOT coerced — callers must reject them (see
+  // isVersionInputTypeValid) so `true`/`123` cannot sneak past the allowlist
+  // as stringified tags.
+  private static normalizeVersionInput(version: string | null | undefined): string | undefined {
     if (version === undefined || version === null) {
       return undefined
     }
-    const text = typeof version === 'string' ? version : String(version)
-    const trimmed = text.trim()
+    const trimmed = version.trim()
     return trimmed.length === 0 ? undefined : trimmed
+  }
+
+  private static isVersionInputTypeValid(version: unknown): version is string | null | undefined {
+    return version === undefined || version === null || typeof version === 'string'
   }
 
   private static isValidPythonPackageName(name: string): boolean {
@@ -438,7 +444,15 @@ export class PackageService {
       enabled = true,
       failOnWarning = false
     } = request
-    // Empty/null versions mean "latest" (see normalizeVersionInput).
+    // Reject non-string version types outright (booleans, numbers, objects
+    // in the JSON body) rather than coercing them to strings, then treat
+    // empty/null versions as "latest" (see normalizeVersionInput).
+    if (!PackageService.isVersionInputTypeValid(request.version)) {
+      return {
+        success: false,
+        error: `Invalid package version: ${String(request.version)}. Version must be a valid npm semver, range, or tag.`
+      }
+    }
     const version = PackageService.normalizeVersionInput(request.version)
     const resolvedTransportType: MCPTransportType = transportType ?? 'stdio'
     const runtime: PackageRuntime = request.runtime ?? 'node'
@@ -950,16 +964,24 @@ export class PackageService {
     error?: string
   }> {
     try {
-      // Empty/null versions mean "latest" (see normalizeVersionInput).
-      version = PackageService.normalizeVersionInput(version)
+      // Reject non-string version types outright (the controller passes
+      // req.body.version through without validating its type), then treat
+      // empty/null versions as "latest" (see normalizeVersionInput).
+      if (!PackageService.isVersionInputTypeValid(version)) {
+        return {
+          success: false,
+          error: `Invalid package version: ${String(version)}. Version must be a valid npm semver, range, or tag.`
+        }
+      }
+      const normalizedVersion = PackageService.normalizeVersionInput(version)
 
       // Validate version against the same strict allowlist used for install,
       // since this value is passed verbatim to npm. Without this check, a
       // caller-controlled version would otherwise reach the npm command line.
-      if (version !== undefined && !PackageService.isValidNpmVersionSpec(version)) {
+      if (normalizedVersion !== undefined && !PackageService.isValidNpmVersionSpec(normalizedVersion)) {
         return {
           success: false,
-          error: `Invalid package version: ${version}. Version must be a valid npm semver, range, or tag.`
+          error: `Invalid package version: ${normalizedVersion}. Version must be a valid npm semver, range, or tag.`
         }
       }
 
@@ -1011,7 +1033,7 @@ export class PackageService {
             ? path.resolve(process.cwd(), packageInfo.venvPath)
             : path.resolve(process.cwd(), packageInfo.installPath)
 
-          const spec = version ? `${packageInfo.name}==${version}` : packageInfo.name
+          const spec = normalizedVersion ? `${packageInfo.name}==${normalizedVersion}` : packageInfo.name
           await this.pipInstall(
             venvAbsolutePath,
             spec,
@@ -1047,7 +1069,7 @@ export class PackageService {
 
         // Perform the upgrade. Pass the package@version spec as a single argument
         // to execFile-based runNpm so shell metacharacters can never be interpreted.
-        const upgradeSpec = `${packageInfo.name}@${version ?? 'latest'}`
+        const upgradeSpec = `${packageInfo.name}@${normalizedVersion ?? 'latest'}`
         log({ level: 'info', msg: `Upgrading package: npm install ${upgradeSpec}` })
         const upgradeResult = await this.runNpm(['install', upgradeSpec], { cwd: packageDir })
 

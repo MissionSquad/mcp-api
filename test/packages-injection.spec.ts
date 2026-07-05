@@ -189,6 +189,54 @@ describe('PackageService command-injection hardening', () => {
       expect(cmdArgs[cmdArgs.length - 1]).toBe('left-pad')
     })
 
+    // Non-string version types must be rejected, not coerced to strings —
+    // `true` must never install the npm tag "true".
+    const nonStringVersions: Array<[string, unknown]> = [
+      ['boolean', true],
+      ['number', 123],
+      ['object', { version: '1.2.3' }],
+      ['array', ['1.2.3']]
+    ]
+    test.each(nonStringVersions)('rejects non-string version type (%s)', async (_label, bad) => {
+      const { service } = createService()
+
+      const result = await service.installPackage({
+        name: 'left-pad',
+        version: bad as unknown as string,
+        serverName: 'left-pad-server'
+      })
+
+      expect(result.success).toBe(false)
+      expect(result.error).toMatch(/version/i)
+      const installCalls = execFilePromisifiedMock.mock.calls.filter(([, args]) =>
+        Array.isArray(args) && (args as string[]).includes('install')
+      )
+      expect(installCalls.length).toBe(0)
+    })
+
+    test('upgradePackage rejects non-string version type', async () => {
+      const { service, dbMock } = createService()
+      dbMock.findOne.mockResolvedValue({
+        name: 'left-pad',
+        version: '1.0.0',
+        installPath: 'packages/left-pad',
+        status: 'installed',
+        installed: new Date('2025-01-01T00:00:00.000Z'),
+        mcpServerId: 'left-pad-server',
+        enabled: true,
+        runtime: 'node'
+      })
+
+      const result = await service.upgradePackage('left-pad-server', true as unknown as string)
+
+      expect(result.success).toBe(false)
+      expect(result.error).toMatch(/version/i)
+      const installCalls = execFilePromisifiedMock.mock.calls.filter(([, args]) =>
+        Array.isArray(args) && (args as string[]).includes('install')
+      )
+      expect(installCalls.length).toBe(0)
+    })
+
     test('trims surrounding whitespace from an otherwise valid version', async () => {
       const { service } = createService()
 
@@ -557,6 +605,9 @@ describe('PackageService command-injection hardening', () => {
       execFilePromisifiedMock.mockImplementation(async (...args: unknown[]) => {
         const cmdArgs = (args[1] as string[]) ?? []
         if (cmdArgs[0] === 'index' && cmdArgs[1] === 'versions') {
+          // Mirrors real `pip index versions <name>` output, which
+          // pipIndexLatestVersion parses by locating the line starting with
+          // "Available versions:" and taking the first comma-separated entry.
           return { stdout: 'Available versions: 3.0.0, 2.0.0\n', stderr: '' }
         }
         return { stdout: '', stderr: '' }
