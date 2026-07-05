@@ -116,6 +116,9 @@ describe('PackageService python runtime support', () => {
     expect(result.error).toBe('pythonModule is required for python runtime.')
   })
 
+  // Boundary rules only: consecutive separators (e.g. `my..pkg`) are
+  // intentionally NOT rejected here — they are shell-inert and deferred to
+  // pip for rejection (see PYTHON_NAME_RE in src/services/packages.ts).
   test.each(['trailing-dash-', 'trailing-dot.', 'trailing_underscore_', '-leading-dash'])(
     'installPackage rejects python package name with non-alphanumeric boundary %p',
     async (badName) => {

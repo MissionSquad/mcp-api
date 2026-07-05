@@ -119,10 +119,11 @@ export class PackageService {
   // starting AND ending with an alphanumeric (single-character names allowed),
   // matching PEP 508's boundary rules. Used both at python install time and to
   // re-validate persisted names before they reach a pip subprocess.
-  // NOTE: still more permissive than full PEP 508 in that consecutive
-  // separators (e.g. `my..pkg`) are accepted; those fail at pip-resolution
-  // time. The purpose of this allowlist is subprocess-argument safety, not
-  // PyPI canonicalization.
+  // Consecutive separators (e.g. `my..pkg`) are INTENTIONALLY accepted and
+  // deferred to pip for rejection: every character in such names is still
+  // shell-inert and passed via execFile argv, so they pose no
+  // subprocess-argument risk — they are merely non-canonical per PEP 508 and
+  // fail at pip-resolution time with pip's own error.
   private static readonly PYTHON_NAME_RE = /^[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?$/
 
   // The public API documents `version` as "optional, defaults to latest".

@@ -423,7 +423,8 @@ export class PackagesController implements Resource {
       // bodies can carry {"version": null}.
       const version = req.body.version as string | null | undefined
 
-      log({ level: 'info', msg: `Upgrading package ${serverName}${version ? ' to version ' + version : ''}` })
+      const versionForLog = typeof version === 'string' ? version.trim() : ''
+      log({ level: 'info', msg: `Upgrading package ${serverName}${versionForLog ? ' to version ' + versionForLog : ''}` })
 
       const result = await this.packageService.upgradePackage(serverName, version)
       if (result.success) {
