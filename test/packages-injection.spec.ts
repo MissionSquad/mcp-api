@@ -108,6 +108,9 @@ describe('PackageService command-injection hardening', () => {
     readFileMock.mockResolvedValue('{}')
     rmMock.mockResolvedValue(undefined)
     execPromisifiedMock.mockResolvedValue({ stdout: '', stderr: '' })
+    // mockResolvedValue REPLACES any per-test mockImplementation set by a
+    // previous test, so custom implementations (e.g. the pip index/show
+    // mocks below) cannot leak across tests.
     execFilePromisifiedMock.mockResolvedValue({ stdout: '', stderr: '' })
   })
 
@@ -157,6 +160,102 @@ describe('PackageService command-injection hardening', () => {
       })
 
       expect(result.success).toBe(true)
+    })
+
+    // The API documents `version` as "optional, defaults to latest". Clients
+    // (including the GUI) send "" or null to mean "no specific version", and
+    // before the injection hardening any falsy version installed latest.
+    // These inputs must NOT be rejected by the version allowlist.
+    const emptyVersions: Array<[string, unknown]> = [
+      ['empty string', ''],
+      ['whitespace string', '   '],
+      ['null', null],
+      ['undefined', undefined]
+    ]
+    test.each(emptyVersions)('treats %s version as "install latest"', async (_label, empty) => {
+      const { service } = createService()
+
+      const result = await service.installPackage({
+        name: 'left-pad',
+        version: empty as string | undefined,
+        serverName: 'left-pad-server'
+      })
+
+      expect(result.success).toBe(true)
+
+      // The install spec must be the bare package name (no trailing @).
+      const installCall = execFilePromisifiedMock.mock.calls.find(([, args]) =>
+        Array.isArray(args) && (args as string[]).includes('install')
+      )
+      expect(installCall).toBeDefined()
+      const cmdArgs = installCall![1] as string[]
+      expect(cmdArgs[cmdArgs.length - 1]).toBe('left-pad')
+    })
+
+    // Non-string version types must be rejected, not coerced to strings —
+    // `true` must never install the npm tag "true".
+    const nonStringVersions: Array<[string, unknown]> = [
+      ['boolean', true],
+      ['number', 123],
+      ['object', { version: '1.2.3' }],
+      ['array', ['1.2.3']]
+    ]
+    test.each(nonStringVersions)('rejects non-string version type (%s)', async (_label, bad) => {
+      const { service } = createService()
+
+      const result = await service.installPackage({
+        name: 'left-pad',
+        version: bad as unknown as string,
+        serverName: 'left-pad-server'
+      })
+
+      expect(result.success).toBe(false)
+      expect(result.error).toMatch(/version/i)
+      const installCalls = execFilePromisifiedMock.mock.calls.filter(([, args]) =>
+        Array.isArray(args) && (args as string[]).includes('install')
+      )
+      expect(installCalls.length).toBe(0)
+    })
+
+    test('upgradePackage rejects non-string version type', async () => {
+      const { service, dbMock } = createService()
+      dbMock.findOne.mockResolvedValue({
+        name: 'left-pad',
+        version: '1.0.0',
+        installPath: 'packages/left-pad',
+        status: 'installed',
+        installed: new Date('2025-01-01T00:00:00.000Z'),
+        mcpServerId: 'left-pad-server',
+        enabled: true,
+        runtime: 'node'
+      })
+
+      const result = await service.upgradePackage('left-pad-server', true as unknown as string)
+
+      expect(result.success).toBe(false)
+      expect(result.error).toMatch(/version/i)
+      const installCalls = execFilePromisifiedMock.mock.calls.filter(([, args]) =>
+        Array.isArray(args) && (args as string[]).includes('install')
+      )
+      expect(installCalls.length).toBe(0)
+    })
+
+    test('trims surrounding whitespace from an otherwise valid version', async () => {
+      const { service } = createService()
+
+      const result = await service.installPackage({
+        name: 'left-pad',
+        version: ' 1.2.3 ',
+        serverName: 'left-pad-server'
+      })
+
+      expect(result.success).toBe(true)
+      const installCall = execFilePromisifiedMock.mock.calls.find(([, args]) =>
+        Array.isArray(args) && (args as string[]).includes('install')
+      )
+      expect(installCall).toBeDefined()
+      const cmdArgs = installCall![1] as string[]
+      expect(cmdArgs[cmdArgs.length - 1]).toBe('left-pad@1.2.3')
     })
   })
 
@@ -354,6 +453,36 @@ describe('PackageService command-injection hardening', () => {
       const cmdArgs = installCalls[0][1] as string[]
       expect(cmdArgs).toEqual(['install', 'left-pad@latest'])
     })
+
+    test('upgradePackage treats empty-string version as "upgrade to latest"', async () => {
+      const { service, dbMock, mcpMock } = createService()
+      dbMock.findOne.mockResolvedValue({ ...existingPackage })
+
+      const serverShape = {
+        name: 'left-pad-server',
+        transportType: 'stdio',
+        command: 'node',
+        args: ['./packages/left-pad/node_modules/left-pad/index.js'],
+        env: {},
+        status: 'connected',
+        enabled: true
+      }
+      mcpMock.getServer.mockResolvedValue({ ...serverShape })
+      mcpMock.disableServer.mockResolvedValue({ ...serverShape, status: 'disconnected', enabled: false })
+      mcpMock.enableServer.mockResolvedValue({ ...serverShape })
+      mcpMock.updateServer.mockResolvedValue({ ...serverShape })
+      readFileMock.mockResolvedValue(JSON.stringify({ version: '2.0.0', main: 'index.js' }))
+
+      const result = await service.upgradePackage('left-pad-server', '')
+
+      expect(result.success).toBe(true)
+
+      const installCall = execFilePromisifiedMock.mock.calls.find(([, args]) =>
+        Array.isArray(args) && (args as string[]).includes('left-pad@latest')
+      )
+      expect(installCall).toBeDefined()
+      expect(installCall![1]).toEqual(['install', 'left-pad@latest'])
+    })
   })
 
   test('checkForUpdates uses execFile (not shell exec) for npm view', async () => {
@@ -455,6 +584,101 @@ describe('PackageService command-injection hardening', () => {
         Array.isArray(args) && (args as string[]).includes('install')
       )
       expect(installCalls.length).toBe(0)
+    })
+
+    test('checkForUpdates still checks python packages with uppercase names via pip', async () => {
+      // PyPI names may legally contain uppercase letters; they must not be
+      // filtered out by the npm name allowlist.
+      const { service, dbMock } = createService()
+      dbMock.find.mockResolvedValue([
+        {
+          name: 'MarkupSafe',
+          version: '2.0.0',
+          installPath: 'packages/python/markupsafe-server',
+          venvPath: 'packages/python/markupsafe-server',
+          status: 'installed',
+          installed: new Date('2025-01-01T00:00:00.000Z'),
+          mcpServerId: 'markupsafe-server',
+          enabled: true,
+          runtime: 'python'
+        }
+      ])
+
+      execFilePromisifiedMock.mockImplementation(async (...args: unknown[]) => {
+        const cmdArgs = (args[1] as string[]) ?? []
+        if (cmdArgs[0] === 'index' && cmdArgs[1] === 'versions') {
+          // Mirrors real `pip index versions <name>` output, which
+          // pipIndexLatestVersion parses by locating the line starting with
+          // "Available versions:" and taking the first comma-separated entry.
+          return { stdout: 'Available versions: 3.0.0, 2.0.0\n', stderr: '' }
+        }
+        return { stdout: '', stderr: '' }
+      })
+
+      const result = await service.checkForUpdates()
+
+      expect(result.updates).toEqual([
+        {
+          serverName: 'markupsafe-server',
+          currentVersion: '2.0.0',
+          latestVersion: '3.0.0',
+          updateAvailable: true
+        }
+      ])
+    })
+
+    test('upgradePackage allows python packages with uppercase names', async () => {
+      const { service, dbMock, mcpMock } = createService()
+      dbMock.findOne.mockResolvedValue({
+        name: 'MarkupSafe',
+        version: '2.0.0',
+        installPath: 'packages/python/markupsafe-server',
+        venvPath: 'packages/python/markupsafe-server',
+        status: 'installed',
+        installed: new Date('2025-01-01T00:00:00.000Z'),
+        mcpServerId: 'markupsafe-server',
+        enabled: false,
+        runtime: 'python',
+        pythonModule: 'markupsafe'
+      })
+      mcpMock.getServer.mockResolvedValue({
+        name: 'markupsafe-server',
+        transportType: 'stdio',
+        command: 'python',
+        args: ['-u', '-m', 'markupsafe'],
+        env: {},
+        status: 'disconnected',
+        enabled: false
+      })
+
+      execFilePromisifiedMock.mockImplementation(async (...args: unknown[]) => {
+        const cmdArgs = (args[1] as string[]) ?? []
+        if (cmdArgs[0] === 'show') {
+          return { stdout: 'Name: MarkupSafe\nVersion: 3.0.0\n', stderr: '' }
+        }
+        return { stdout: '', stderr: '' }
+      })
+
+      const result = await service.upgradePackage('markupsafe-server')
+
+      expect(result.success).toBe(true)
+      expect(result.package?.version).toBe('3.0.0')
+
+      // Confirm the pip code path actually ran: the upgrade must go through
+      // `pip install --upgrade MarkupSafe` and the new version must have been
+      // read from `pip show MarkupSafe` (not from a node package.json).
+      const pipInstallCall = execFilePromisifiedMock.mock.calls.find(([, args]) =>
+        Array.isArray(args) &&
+        (args as string[])[0] === 'install' &&
+        (args as string[]).includes('--upgrade') &&
+        (args as string[]).includes('MarkupSafe')
+      )
+      expect(pipInstallCall).toBeDefined()
+      const pipShowCall = execFilePromisifiedMock.mock.calls.find(([, args]) =>
+        Array.isArray(args) && (args as string[])[0] === 'show'
+      )
+      expect(pipShowCall).toBeDefined()
+      expect(pipShowCall![1]).toEqual(['show', 'MarkupSafe'])
     })
 
     test('checkForUpdates skips packages with invalid persisted names', async () => {
