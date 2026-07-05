@@ -661,6 +661,22 @@ describe('PackageService command-injection hardening', () => {
 
       expect(result.success).toBe(true)
       expect(result.package?.version).toBe('3.0.0')
+
+      // Confirm the pip code path actually ran: the upgrade must go through
+      // `pip install --upgrade MarkupSafe` and the new version must have been
+      // read from `pip show MarkupSafe` (not from a node package.json).
+      const pipInstallCall = execFilePromisifiedMock.mock.calls.find(([, args]) =>
+        Array.isArray(args) &&
+        (args as string[])[0] === 'install' &&
+        (args as string[]).includes('--upgrade') &&
+        (args as string[]).includes('MarkupSafe')
+      )
+      expect(pipInstallCall).toBeDefined()
+      const pipShowCall = execFilePromisifiedMock.mock.calls.find(([, args]) =>
+        Array.isArray(args) && (args as string[])[0] === 'show'
+      )
+      expect(pipShowCall).toBeDefined()
+      expect(pipShowCall![1]).toEqual(['show', 'MarkupSafe'])
     })
 
     test('checkForUpdates skips packages with invalid persisted names', async () => {

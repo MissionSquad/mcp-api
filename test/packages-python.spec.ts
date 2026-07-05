@@ -116,6 +116,23 @@ describe('PackageService python runtime support', () => {
     expect(result.error).toBe('pythonModule is required for python runtime.')
   })
 
+  test.each(['trailing-dash-', 'trailing-dot.', 'trailing_underscore_', '-leading-dash'])(
+    'installPackage rejects python package name with non-alphanumeric boundary %p',
+    async (badName) => {
+      const { service } = createService()
+
+      const result = await service.installPackage({
+        name: badName,
+        serverName: 'python-server',
+        runtime: 'python',
+        pythonModule: 'my_mcp_server'
+      })
+
+      expect(result.success).toBe(false)
+      expect(result.error).toBe(`Invalid Python package name: ${badName}`)
+    }
+  )
+
   test('installPackage configures stdio server for python runtime with venv python -m module', async () => {
     const { service, dbMock, mcpMock } = createService()
 

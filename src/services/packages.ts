@@ -116,14 +116,14 @@ export class PackageService {
   private static readonly NPM_VERSION_SPEC_RE = /^(?!-)[A-Za-z0-9.\-+~^<>=|*x_]+$/
 
   // Python (PyPI) package names: letters (either case), digits, `_`, `.`, `-`,
-  // starting with an alphanumeric. Mirrors the check applied at python
-  // install time so persisted names can be safely re-validated later.
-  // NOTE: intentionally more permissive than PEP 508, which also requires an
-  // alphanumeric final character and forbids consecutive separators (e.g.
-  // `my..pkg` passes here but is not a canonical PyPI name). Such names fail
-  // at pip-resolution time rather than here; the purpose of this allowlist is
-  // subprocess-argument safety, not PyPI canonicalization.
-  private static readonly PYTHON_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/
+  // starting AND ending with an alphanumeric (single-character names allowed),
+  // matching PEP 508's boundary rules. Used both at python install time and to
+  // re-validate persisted names before they reach a pip subprocess.
+  // NOTE: still more permissive than full PEP 508 in that consecutive
+  // separators (e.g. `my..pkg`) are accepted; those fail at pip-resolution
+  // time. The purpose of this allowlist is subprocess-argument safety, not
+  // PyPI canonicalization.
+  private static readonly PYTHON_NAME_RE = /^[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?$/
 
   // The public API documents `version` as "optional, defaults to latest".
   // Callers commonly send `""` or `null` to mean "no specific version", and
