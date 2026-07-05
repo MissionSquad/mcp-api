@@ -118,6 +118,11 @@ export class PackageService {
   // Python (PyPI) package names: letters (either case), digits, `_`, `.`, `-`,
   // starting with an alphanumeric. Mirrors the check applied at python
   // install time so persisted names can be safely re-validated later.
+  // NOTE: intentionally more permissive than PEP 508, which also requires an
+  // alphanumeric final character and forbids consecutive separators (e.g.
+  // `my..pkg` passes here but is not a canonical PyPI name). Such names fail
+  // at pip-resolution time rather than here; the purpose of this allowlist is
+  // subprocess-argument safety, not PyPI canonicalization.
   private static readonly PYTHON_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/
 
   // The public API documents `version` as "optional, defaults to latest".

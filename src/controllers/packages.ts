@@ -416,6 +416,10 @@ export class PackagesController implements Resource {
   private async upgradePackage(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const serverName = req.params.name
+      // The cast does not validate the body at runtime — PackageService
+      // deliberately re-checks the version's type and format (see
+      // isVersionInputTypeValid), so that guard is load-bearing, not
+      // redundant with this annotation.
       const version = req.body.version as string | undefined
 
       log({ level: 'info', msg: `Upgrading package ${serverName}${version ? ' to version ' + version : ''}` })
