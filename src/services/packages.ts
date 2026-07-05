@@ -115,6 +115,29 @@ export class PackageService {
   // passed to `.cmd`/`.bat` files.
   private static readonly NPM_VERSION_SPEC_RE = /^(?!-)[A-Za-z0-9.\-+~^<>=|*x_]+$/
 
+  // Python (PyPI) package names: letters (either case), digits, `_`, `.`, `-`,
+  // starting with an alphanumeric. Mirrors the check applied at python
+  // install time so persisted names can be safely re-validated later.
+  private static readonly PYTHON_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/
+
+  // The public API documents `version` as "optional, defaults to latest".
+  // Callers commonly send `""` or `null` to mean "no specific version", and
+  // the pre-validation code treated any falsy version that way. Normalize
+  // those inputs to `undefined` (and trim whitespace) BEFORE validating, so
+  // the strict allowlist only ever rejects versions the caller actually set.
+  private static normalizeVersionInput(version: unknown): string | undefined {
+    if (version === undefined || version === null) {
+      return undefined
+    }
+    const text = typeof version === 'string' ? version : String(version)
+    const trimmed = text.trim()
+    return trimmed.length === 0 ? undefined : trimmed
+  }
+
+  private static isValidPythonPackageName(name: string): boolean {
+    return typeof name === 'string' && PackageService.PYTHON_NAME_RE.test(name)
+  }
+
   private static isValidNpmName(name: string): boolean {
     if (typeof name !== 'string' || name.length === 0 || name.length > 214) {
       return false
@@ -404,7 +427,6 @@ export class PackageService {
   }> {
     const {
       name,
-      version,
       serverName,
       transportType,
       command,
@@ -416,6 +438,8 @@ export class PackageService {
       enabled = true,
       failOnWarning = false
     } = request
+    // Empty/null versions mean "latest" (see normalizeVersionInput).
+    const version = PackageService.normalizeVersionInput(request.version)
     const resolvedTransportType: MCPTransportType = transportType ?? 'stdio'
     const runtime: PackageRuntime = request.runtime ?? 'node'
     const serverMetadata = this.buildServerMetadataInput(request)
@@ -427,7 +451,7 @@ export class PackageService {
       if (!/^[a-zA-Z0-9_.]+$/.test(request.pythonModule)) {
         return { success: false, error: `Invalid pythonModule: ${request.pythonModule}` }
       }
-      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)) {
+      if (!PackageService.isValidPythonPackageName(name)) {
         return { success: false, error: `Invalid Python package name: ${name}` }
       }
       if (resolvedTransportType !== 'stdio') {
@@ -828,11 +852,16 @@ export class PackageService {
           // Skip packages without mcpServerId
           if (!pkg.mcpServerId) continue
 
-          // Skip packages whose stored name would fail the strict allowlist.
-          // `pkg.name` originates from the install-time request and is
-          // re-validated here as defense-in-depth before it reaches the
-          // npm subprocess.
-          if (!PackageService.isValidNpmName(pkg.name)) {
+          // Re-validate the persisted name with the allowlist for the
+          // package's runtime before it reaches a subprocess. Python names
+          // may legally contain uppercase letters, so they must NOT be
+          // checked against the npm allowlist (that would skip legitimate
+          // python packages installed before this check existed).
+          const nameIsValidForRuntime =
+            pkg.runtime === 'python'
+              ? PackageService.isValidPythonPackageName(pkg.name)
+              : PackageService.isValidNpmName(pkg.name)
+          if (!nameIsValidForRuntime) {
             log({
               level: 'warn',
               msg: `Skipping update check for package with invalid name: ${pkg.name}`
@@ -921,6 +950,9 @@ export class PackageService {
     error?: string
   }> {
     try {
+      // Empty/null versions mean "latest" (see normalizeVersionInput).
+      version = PackageService.normalizeVersionInput(version)
+
       // Validate version against the same strict allowlist used for install,
       // since this value is passed verbatim to npm. Without this check, a
       // caller-controlled version would otherwise reach the npm command line.
@@ -937,11 +969,18 @@ export class PackageService {
         return { success: false, error: `Package ${serverName} not found` }
       }
 
-      // Re-validate the persisted package name. Although names are validated
-      // at install time, defending the npm invocation here makes the upgrade
-      // path safe even if a record predates the install-time check or was
-      // written through some other path.
-      if (!PackageService.isValidNpmName(packageInfo.name)) {
+      // Re-validate the persisted package name with the allowlist for the
+      // package's runtime. Although names are validated at install time,
+      // defending the subprocess invocation here makes the upgrade path safe
+      // even if a record predates the install-time check or was written
+      // through some other path. Python names may legally contain uppercase
+      // letters, so they are checked against the python allowlist, not npm's.
+      const packageRuntime: PackageRuntime = packageInfo.runtime ?? 'node'
+      const nameIsValidForRuntime =
+        packageRuntime === 'python'
+          ? PackageService.isValidPythonPackageName(packageInfo.name)
+          : PackageService.isValidNpmName(packageInfo.name)
+      if (!nameIsValidForRuntime) {
         return {
           success: false,
           error: `Invalid package name on existing record: ${packageInfo.name}.`
@@ -967,8 +1006,7 @@ export class PackageService {
       }
 
       try {
-        const runtime: PackageRuntime = packageInfo.runtime ?? 'node'
-        if (runtime === 'python') {
+        if (packageRuntime === 'python') {
           const venvAbsolutePath = packageInfo.venvPath
             ? path.resolve(process.cwd(), packageInfo.venvPath)
             : path.resolve(process.cwd(), packageInfo.installPath)
