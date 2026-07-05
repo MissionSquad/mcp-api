@@ -883,7 +883,7 @@ export class PackageService {
           if (!nameIsValidForRuntime) {
             log({
               level: 'warn',
-              msg: `Skipping update check for package with invalid name: ${pkg.name}`
+              msg: `Skipping update check for package with invalid ${pkg.runtime ?? 'node'} name: ${pkg.name}`
             })
             updates.push({
               serverName: pkg.mcpServerId,
@@ -961,7 +961,7 @@ export class PackageService {
    */
   async upgradePackage(
     serverName: string,
-    version?: string
+    version?: string | null
   ): Promise<{
     success: boolean
     package?: PackageInfo
@@ -1008,6 +1008,10 @@ export class PackageService {
           ? PackageService.isValidPythonPackageName(packageInfo.name)
           : PackageService.isValidNpmName(packageInfo.name)
       if (!nameIsValidForRuntime) {
+        log({
+          level: 'warn',
+          msg: `Refusing to upgrade ${serverName}: persisted package name ${packageInfo.name} fails the ${packageRuntime} name allowlist`
+        })
         return {
           success: false,
           error: `Invalid package name on existing record: ${packageInfo.name}.`

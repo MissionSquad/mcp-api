@@ -419,8 +419,9 @@ export class PackagesController implements Resource {
       // The cast does not validate the body at runtime — PackageService
       // deliberately re-checks the version's type and format (see
       // isVersionInputTypeValid), so that guard is load-bearing, not
-      // redundant with this annotation.
-      const version = req.body.version as string | undefined
+      // redundant with this annotation. `null` is included because JSON
+      // bodies can carry {"version": null}.
+      const version = req.body.version as string | null | undefined
 
       log({ level: 'info', msg: `Upgrading package ${serverName}${version ? ' to version ' + version : ''}` })
 

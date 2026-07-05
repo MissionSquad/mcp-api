@@ -108,6 +108,9 @@ describe('PackageService command-injection hardening', () => {
     readFileMock.mockResolvedValue('{}')
     rmMock.mockResolvedValue(undefined)
     execPromisifiedMock.mockResolvedValue({ stdout: '', stderr: '' })
+    // mockResolvedValue REPLACES any per-test mockImplementation set by a
+    // previous test, so custom implementations (e.g. the pip index/show
+    // mocks below) cannot leak across tests.
     execFilePromisifiedMock.mockResolvedValue({ stdout: '', stderr: '' })
   })
 
@@ -474,12 +477,11 @@ describe('PackageService command-injection hardening', () => {
 
       expect(result.success).toBe(true)
 
-      const installCalls = execFilePromisifiedMock.mock.calls.filter(([, args]) =>
-        Array.isArray(args) && (args as string[]).includes('install')
+      const installCall = execFilePromisifiedMock.mock.calls.find(([, args]) =>
+        Array.isArray(args) && (args as string[]).includes('left-pad@latest')
       )
-      expect(installCalls.length).toBeGreaterThan(0)
-      const cmdArgs = installCalls[0][1] as string[]
-      expect(cmdArgs).toEqual(['install', 'left-pad@latest'])
+      expect(installCall).toBeDefined()
+      expect(installCall![1]).toEqual(['install', 'left-pad@latest'])
     })
   })
 
