@@ -19,6 +19,7 @@ export const env = {
     return { repo, name }
   }),
   SEARXNG_URL: process.env.SEARXNG_URL,
+  RESOURCE_STATS_INTERVAL_MS: Number(process.env.RESOURCE_STATS_INTERVAL_MS ?? 60000) || 0,
   PYTHON_BIN: process.env.PYTHON_BIN,
   PYTHON_VENV_DIR: process.env.PYTHON_VENV_DIR || 'packages/python',
   PIP_INDEX_URL: process.env.PIP_INDEX_URL,

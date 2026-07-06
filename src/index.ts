@@ -13,6 +13,7 @@ import { McpOAuthTokens } from './services/oauthTokens'
 import { McpUserSessions } from './services/userSessions'
 import { McpUserServerInstalls } from './services/userServerInstalls'
 import { McpDcrClients } from './services/dcrClients'
+import { ResourceStatsService } from './services/resourceStats'
 
 export type Resource = {
   init: () => Promise<void>
@@ -92,6 +93,14 @@ export class API {
     
     // Set up circular dependency between MCPService and PackageService
     mcpController.getMcpService().setPackageService(packagesController.getPackageService())
+
+    // Periodic resource-stats logging for mcp-api and its spawned MCP servers
+    const resourceStatsService = new ResourceStatsService({
+      intervalMs: env.RESOURCE_STATS_INTERVAL_MS,
+      getTrackedProcesses: () => mcpController.getMcpService().getStdioServerPids()
+    })
+    await resourceStatsService.init()
+    this.resources.push(resourceStatsService)
 
     app.get('/healthz', (req, res) => {
       console.log('Health checked')

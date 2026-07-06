@@ -42,6 +42,7 @@ import {
   McpServerAlreadyExistsError
 } from './mcpErrors'
 import { validateExternalMcpUrl } from '../utils/ssrf'
+import { getStdioTransportPid } from '../utils/resourceStats'
 
 export interface MCPConnection {
   client: Client
@@ -3814,6 +3815,25 @@ export class MCPService implements Resource {
     }
 
     return updatedServer
+  }
+
+  /**
+   * Lists the OS process ids of currently running stdio MCP servers,
+   * labeled by server name, for resource monitoring.
+   */
+  public getStdioServerPids(): { name: string; pid: number }[] {
+    const tracked: { name: string; pid: number }[] = []
+    for (const serverKey of Object.keys(this.servers)) {
+      const server = this.servers[serverKey]
+      if (server.transportType !== 'stdio') continue
+      const transport = server.connection?.transport
+      if (!transport) continue
+      const pid = getStdioTransportPid(transport)
+      if (pid !== undefined) {
+        tracked.push({ name: server.name, pid })
+      }
+    }
+    return tracked
   }
 
   public async stop() {
