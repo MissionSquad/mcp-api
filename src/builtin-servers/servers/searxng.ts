@@ -99,12 +99,13 @@ export class BuiltInSearxngServer extends BaseBuiltInServer {
   async stop(): Promise<void> {
     if (this.scraper) {
       try {
-        // Puppeteer cleanup would go here
-        // Note: PuppeteerScraper needs a cleanup method
+        await this.scraper.closeBrowser()
         log({ level: 'info', msg: 'Stopped Puppeteer scraper' })
       } catch (error) {
         log({ level: 'error', msg: 'Error stopping Puppeteer scraper', error })
       }
+      this.scraper = null
+      this.scraperReady = false
     }
   }
   
