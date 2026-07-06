@@ -918,6 +918,29 @@ const normalizeExternalAuthError = (
   return error
 }
 
+/**
+ * Maximum number of in-memory log lines retained per MCP server and per
+ * per-user connection. Older lines are displaced once this count is exceeded.
+ */
+export const MAX_SERVER_LOG_LINES = 500
+
+/**
+ * Append a log line to an in-memory logs array, capping the array at
+ * {@link MAX_SERVER_LOG_LINES} entries by COUNT ONLY (no time-based eviction).
+ * When the cap is exceeded, the oldest lines are dropped so the array retains
+ * the most recent {@link MAX_SERVER_LOG_LINES} lines in insertion order.
+ *
+ * @param logs - The logs array to append to. A no-op when `undefined`.
+ * @param message - The log line to append.
+ */
+export function appendServerLog(logs: string[] | undefined, message: string): void {
+  if (!logs) return
+  logs.push(message)
+  if (logs.length > MAX_SERVER_LOG_LINES) {
+    logs.splice(0, logs.length - MAX_SERVER_LOG_LINES)
+  }
+}
+
 export class MCPService implements Resource {
   public servers: Record<string, MCPServer> = {}
   public userConnections: Record<UserServerKey, UserConnection> = {}
@@ -2249,7 +2272,7 @@ export class MCPService implements Resource {
     const transportErrorHandler = async (error: Error) => {
       log({ level: 'error', msg: `${serverKey} transport error: ${error.message}`, error })
       if (this.servers[serverKey]) {
-        this.servers[serverKey].logs?.push(error.message)
+        appendServerLog(this.servers[serverKey].logs, error.message)
       }
     }
 
@@ -2321,7 +2344,7 @@ export class MCPService implements Resource {
             const logMsg = data.toString().trim()
             log({ level: 'error', msg: `[${server.name}] stderr: ${logMsg}` })
             if (this.servers[serverKey]) {
-              this.servers[serverKey].logs?.push(logMsg)
+              appendServerLog(this.servers[serverKey].logs, logMsg)
             }
           }
 
@@ -2447,7 +2470,7 @@ export class MCPService implements Resource {
       log({ level: 'error', msg: `[${username}:${server.name}] transport error: ${error.message}`, error })
       const conn = this.userConnections[userKey]
       if (conn) {
-        conn.logs?.push(error.message)
+        appendServerLog(conn.logs, error.message)
       }
     }
 

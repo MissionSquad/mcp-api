@@ -30,7 +30,7 @@
   "author": "Jayson Jacobs",
   "license": "Apache-2.0",
   "dependencies": {
-    "@missionsquad/puppeteer-scraper": "^1.1.1",
+    "@missionsquad/puppeteer-scraper": "^1.1.2",
     "@modelcontextprotocol/sdk": "^1.13.0",
     "@types/bcrypt": "^5.0.2",
     "base64-js": "^1.5.1",
