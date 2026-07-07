@@ -118,9 +118,9 @@ describe('sampleProcessTree', () => {
 })
 
 describe('formatMebibytes', () => {
-  it('formats bytes as MB with one decimal', () => {
-    expect(formatMebibytes(412.3 * 1024 * 1024)).toBe('412.3MB')
-    expect(formatMebibytes(0)).toBe('0.0MB')
+  it('formats bytes as base-1024 MiB with one decimal', () => {
+    expect(formatMebibytes(412.3 * 1024 * 1024)).toBe('412.3MiB')
+    expect(formatMebibytes(0)).toBe('0.0MiB')
   })
 })
 
@@ -169,6 +169,21 @@ describe('shortenProcessLabel', () => {
     // Recognizable script forms -> runtime + script basename.
     expect(shortenProcessLabel('node worker.mjs')).toBe('node worker.mjs')
     expect(shortenProcessLabel('ts-node ./src/index.ts')).toBe('ts-node index.ts')
+  })
+
+  it('skips flag values (e.g. -r/--require preloads) and selects the real script', () => {
+    expect(shortenProcessLabel('node -r ts-node/register /app/index.js')).toBe('node index.js')
+    expect(shortenProcessLabel('node --require ./setup.js /srv/main.js')).toBe('node main.js')
+    expect(shortenProcessLabel('node --import tsx /app/dist/server.js')).toBe('node server.js')
+    // The preloaded module name must not become the label.
+    expect(shortenProcessLabel('node -r ts-node/register /app/index.js')).not.toContain('register')
+  })
+
+  it('never surfaces inline eval code even when it contains a slash or extension', () => {
+    expect(shortenProcessLabel('node -e require("/etc/passwd")')).toBe('node')
+    expect(shortenProcessLabel('node -e require("/etc/passwd")')).not.toContain('passwd')
+    expect(shortenProcessLabel('python -c open("/secret/key.pem")')).toBe('python')
+    expect(shortenProcessLabel('python -c open("/secret/key.pem")')).not.toContain('key.pem')
   })
 
   it('falls back to "unknown" for an empty command', () => {

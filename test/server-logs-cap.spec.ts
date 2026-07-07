@@ -61,10 +61,11 @@ describe('appendServerLog', () => {
     expect(logs).toEqual(expected)
   })
 
-  it('stays bounded and correct under sustained high-volume appends (memory does not grow)', () => {
+  it('never exceeds the cap length under sustained high-volume appends (bounds retained lines)', () => {
     // Mirrors the exact scenario the cap guards against: a chatty stdio server
-    // streaming stderr lines for the whole process lifetime. The array must never
-    // exceed the cap regardless of how many lines are pushed.
+    // streaming stderr lines for the whole process lifetime. The array length must
+    // never exceed the cap regardless of how many lines are pushed — which is what
+    // bounds the retained-line count (and therefore this buffer's memory).
     const logs: string[] = []
     const VOLUME = 100_000
     let peak = 0

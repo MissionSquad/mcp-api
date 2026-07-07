@@ -106,13 +106,24 @@ export function aggregateDirectChildSubtrees(samples: ProcessSample[], rootPid: 
 
 const RUNTIME_EXECUTABLES = new Set(['node', 'nodejs', 'python', 'python3', 'bun', 'deno', 'ts-node'])
 const SCRIPT_FILE_PATTERN = /\.(m?[jt]s|cjs|py|sh)$/i
+// Flags whose following token is inline code — the process has no script file and
+// the value must never be surfaced (it can contain arbitrary code/secrets).
+const EVAL_FLAGS = new Set(['-e', '--eval', '-p', '--print', '-c'])
+// Flags whose following token is a value that is NOT the main script (a preloaded
+// module, loader, etc.); the value must be skipped so the real script is found.
+const VALUE_FLAGS = new Set([
+  ...EVAL_FLAGS,
+  '-r',
+  '--require',
+  '--import',
+  '--loader',
+  '--experimental-loader'
+])
 
 /**
  * True when a token looks like a path to a script file rather than an arbitrary
  * argument value: it either contains a path separator or ends in a known script
- * extension. Used to ensure {@link shortenProcessLabel} only surfaces genuine
- * script paths — never inline code passed to eval flags (`node -e <code>`,
- * `python -c <code>`) or other argument values.
+ * extension.
  */
 function looksLikeScriptPath(token: string): boolean {
   return token.includes('/') || SCRIPT_FILE_PATTERN.test(token)
@@ -121,23 +132,47 @@ function looksLikeScriptPath(token: string): boolean {
 /**
  * Derives a concise, human-readable label from a full `ps command=` string for
  * use in log lines. Returns the executable basename; for language runtimes
- * (node/python/...) it also appends the script basename so that otherwise
- * identical `node` processes stay distinguishable. Only executable and
- * script-file basenames are used — arbitrary arguments (including inline code
- * after `-e`/`-c`) are intentionally dropped so they never reach the logs
- * (avoids leaking sensitive values passed on the command line and keeps labels
- * readable).
+ * (node/python/...) it also appends the basename of the main script so that
+ * otherwise identical `node` processes stay distinguishable.
+ *
+ * Only executable and genuine script-file basenames are surfaced. Flags and
+ * their values are parsed so that inline code (`node -e <code>`, `python -c
+ * <code>`) and preloaded-module values (`node -r <module>`) are never mistaken
+ * for the script — this keeps arbitrary/sensitive command-line values out of the
+ * logs even when they contain path separators or script-like extensions.
  */
 export function shortenProcessLabel(command: string): string {
   const trimmed = command.trim()
   if (!trimmed) return 'unknown'
   const tokens = trimmed.split(/\s+/)
   const exe = basename(tokens[0])
-  if (RUNTIME_EXECUTABLES.has(exe)) {
-    const scriptToken = tokens.slice(1).find((token) => !token.startsWith('-') && looksLikeScriptPath(token))
-    if (scriptToken) {
-      return `${exe} ${basename(scriptToken)}`
+  if (!RUNTIME_EXECUTABLES.has(exe)) {
+    return exe
+  }
+
+  let sawEvalFlag = false
+  let script: string | undefined
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i]
+    if (token.startsWith('-')) {
+      const name = token.includes('=') ? token.slice(0, token.indexOf('=')) : token
+      if (EVAL_FLAGS.has(name)) {
+        sawEvalFlag = true
+      }
+      // A separate value token (no inline `=`) belongs to this flag, not the script.
+      if (!token.includes('=') && VALUE_FLAGS.has(name)) {
+        i++
+      }
+      continue
     }
+    // First positional token — the main script/entrypoint.
+    script = token
+    break
+  }
+
+  // Eval/print invocations have no script file; never surface the inline code.
+  if (!sawEvalFlag && script && looksLikeScriptPath(script)) {
+    return `${exe} ${basename(script)}`
   }
   return exe
 }
@@ -161,6 +196,11 @@ export function sampleProcessTree(): Promise<ProcessSample[]> {
   })
 }
 
+/**
+ * Formats a byte count as base-1024 mebibytes with a `MiB` suffix (matching the
+ * unit the math actually produces, so operators can compare against `docker
+ * stats` / `top` without a base-1000 vs base-1024 mismatch).
+ */
 export function formatMebibytes(bytes: number): string {
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MiB`
 }
