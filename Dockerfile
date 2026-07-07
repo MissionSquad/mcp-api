@@ -52,6 +52,7 @@ RUN apt-get update \
   libssl3 \
   zlib1g \
   lsb-release \
+  procps \
   wget \
   xdg-utils \
   && rm -rf /var/lib/apt/lists/*

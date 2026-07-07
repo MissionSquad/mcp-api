@@ -1,0 +1,217 @@
+import { execFile } from 'node:child_process'
+import { basename } from 'node:path'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
+
+export interface ProcessSample {
+  pid: number
+  ppid: number
+  rssBytes: number
+  cpuPercent: number
+  command: string
+}
+
+export interface SubtreeSample {
+  rootPid: number
+  command: string
+  rssBytes: number
+  cpuPercent: number
+  processCount: number
+}
+
+/**
+ * Extracts the OS process id from a stdio client transport.
+ *
+ * @modelcontextprotocol/sdk 1.13.0 does not expose a public accessor for the
+ * spawned child process (verified against dist/cjs/client/stdio.d.ts: `_process`
+ * is private and no `pid` getter exists). This helper is the single, isolated
+ * place that reaches into that private field, and it validates the value at
+ * runtime so an SDK upgrade that changes internals degrades to `undefined`
+ * instead of misbehaving.
+ */
+export function getStdioTransportPid(transport: Transport): number | undefined {
+  if (!(transport instanceof StdioClientTransport)) {
+    return undefined
+  }
+  const internals = transport as unknown as { _process?: { pid?: unknown } }
+  const pid = internals._process?.pid
+  return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : undefined
+}
+
+/**
+ * Parses `ps -eo pid=,ppid=,rss=,pcpu=,command=` output.
+ * rss is reported by ps in kilobytes on both Linux (procps) and macOS (BSD ps).
+ * `command` is the full command line (may contain spaces), so it is everything
+ * after the fourth column. Use {@link shortenProcessLabel} to derive a concise,
+ * argument-free label for logging.
+ */
+export function parsePsOutput(output: string): ProcessSample[] {
+  const samples: ProcessSample[] = []
+  for (const line of output.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const match = trimmed.match(/^(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+(.+)$/)
+    if (!match) continue
+    samples.push({
+      pid: Number(match[1]),
+      ppid: Number(match[2]),
+      rssBytes: Number(match[3]) * 1024,
+      cpuPercent: Number(match[4]),
+      command: match[5].trim()
+    })
+  }
+  return samples
+}
+
+/**
+ * Groups every process descending from rootPid into one aggregate per direct
+ * child of rootPid: the child's own usage plus everything below it. This keeps
+ * one log line per spawned server (or browser) even when it forks helpers of
+ * its own (e.g. Chromium renderer processes).
+ */
+export function aggregateDirectChildSubtrees(samples: ProcessSample[], rootPid: number): SubtreeSample[] {
+  const childrenByPpid = new Map<number, ProcessSample[]>()
+  for (const sample of samples) {
+    const siblings = childrenByPpid.get(sample.ppid)
+    if (siblings) {
+      siblings.push(sample)
+    } else {
+      childrenByPpid.set(sample.ppid, [sample])
+    }
+  }
+
+  const collectSubtree = (pid: number, into: ProcessSample[], seen: Set<number>): void => {
+    for (const child of childrenByPpid.get(pid) ?? []) {
+      if (seen.has(child.pid)) continue
+      seen.add(child.pid)
+      into.push(child)
+      collectSubtree(child.pid, into, seen)
+    }
+  }
+
+  const subtrees: SubtreeSample[] = []
+  for (const directChild of childrenByPpid.get(rootPid) ?? []) {
+    const members: ProcessSample[] = [directChild]
+    collectSubtree(directChild.pid, members, new Set([directChild.pid]))
+    subtrees.push({
+      rootPid: directChild.pid,
+      command: directChild.command,
+      rssBytes: members.reduce((sum, m) => sum + m.rssBytes, 0),
+      cpuPercent: members.reduce((sum, m) => sum + m.cpuPercent, 0),
+      processCount: members.length
+    })
+  }
+  return subtrees
+}
+
+const RUNTIME_EXECUTABLES = new Set(['node', 'nodejs', 'python', 'python3', 'bun', 'deno', 'ts-node'])
+const SCRIPT_FILE_PATTERN = /\.(m?[jt]s|cjs|py|sh)$/i
+// Flags whose following token is inline code — the process has no script file and
+// the value must never be surfaced (it can contain arbitrary code/secrets).
+const EVAL_FLAGS = new Set(['-e', '--eval', '-p', '--print', '-c'])
+// Flags whose following token is a value that is NOT the main script (a preloaded
+// module, loader, etc.); the value must be skipped so the real script is found.
+const VALUE_FLAGS = new Set([
+  ...EVAL_FLAGS,
+  '-r',
+  '--require',
+  '--import',
+  '--loader',
+  '--experimental-loader'
+])
+
+/**
+ * True when a token looks like a path to a script file rather than an arbitrary
+ * argument value: it either contains a path separator or ends in a known script
+ * extension.
+ */
+function looksLikeScriptPath(token: string): boolean {
+  return token.includes('/') || SCRIPT_FILE_PATTERN.test(token)
+}
+
+/**
+ * Derives a concise, human-readable label from a full `ps command=` string for
+ * use in log lines. Returns the executable basename; for language runtimes
+ * (node/python/...) it also appends the basename of the main script so that
+ * otherwise identical `node` processes stay distinguishable.
+ *
+ * Only executable and genuine script-file basenames are surfaced. Flags and
+ * their values are parsed so that inline code (`node -e <code>`, `python -c
+ * <code>`) and preloaded-module values (`node -r <module>`) are never mistaken
+ * for the script — this keeps arbitrary/sensitive command-line values out of the
+ * logs even when they contain path separators or script-like extensions.
+ */
+export function shortenProcessLabel(command: string): string {
+  const trimmed = command.trim()
+  if (!trimmed) return 'unknown'
+  const tokens = trimmed.split(/\s+/)
+  const exe = basename(tokens[0])
+  if (!RUNTIME_EXECUTABLES.has(exe)) {
+    return exe
+  }
+
+  let sawEvalFlag = false
+  let script: string | undefined
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i]
+    if (token.startsWith('-')) {
+      const name = token.includes('=') ? token.slice(0, token.indexOf('=')) : token
+      if (EVAL_FLAGS.has(name)) {
+        sawEvalFlag = true
+      }
+      // A separate value token (no inline `=`) belongs to this flag, not the script.
+      if (!token.includes('=') && VALUE_FLAGS.has(name)) {
+        i++
+      }
+      continue
+    }
+    // First positional token — the main script/entrypoint.
+    script = token
+    break
+  }
+
+  // Eval/print invocations have no script file; never surface the inline code.
+  if (!sawEvalFlag && script && looksLikeScriptPath(script)) {
+    return `${exe} ${basename(script)}`
+  }
+  return exe
+}
+
+// Bounds a single `ps` invocation. A normal `ps -eo` completes in milliseconds;
+// this ceiling exists only so a wedged `ps` cannot stall sampling (and, via
+// stop() awaiting the in-flight sample, shutdown) indefinitely.
+const PS_TIMEOUT_MS = 5000
+
+/**
+ * Samples the full OS process tree with a single `ps` invocation.
+ * Requires the `ps` utility (procps on Linux images — installed in the
+ * Dockerfile; present by default on macOS/BSD).
+ *
+ * @throws Error when `ps` is unavailable, times out ({@link PS_TIMEOUT_MS}), or
+ * exits abnormally.
+ */
+export function sampleProcessTree(): Promise<ProcessSample[]> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'ps',
+      ['-eo', 'pid=,ppid=,rss=,pcpu=,command='],
+      { maxBuffer: 4 * 1024 * 1024, timeout: PS_TIMEOUT_MS },
+      (error, stdout) => {
+        if (error) {
+          reject(error)
+          return
+        }
+        resolve(parsePsOutput(stdout))
+      }
+    )
+  })
+}
+
+/**
+ * Formats a byte count as base-1024 mebibytes with a `MiB` suffix (matching the
+ * unit the math actually produces, so operators can compare against `docker
+ * stats` / `top` without a base-1000 vs base-1024 mismatch).
+ */
+export function formatMebibytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MiB`
+}

@@ -2,6 +2,18 @@ import dotenv from 'dotenv'
 
 dotenv.config()
 
+/**
+ * Parses a millisecond-interval env var. Returns `fallback` when the var is
+ * unset, blank, or not a finite number (so a typo defaults to the intended
+ * interval rather than silently disabling the feature). An explicit finite
+ * value — including `0`, which callers treat as "disabled" — is returned as-is.
+ */
+function parseIntervalMs(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === '') return fallback
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
 export const env = {
   DEBUG: /true/i.test(process.env.DEBUG || 'false'),
   ENABLE_OAUTH_LOGGING: /true/i.test(process.env.ENABLE_OAUTH_LOGGING || 'false'),
@@ -19,6 +31,7 @@ export const env = {
     return { repo, name }
   }),
   SEARXNG_URL: process.env.SEARXNG_URL,
+  RESOURCE_STATS_INTERVAL_MS: parseIntervalMs(process.env.RESOURCE_STATS_INTERVAL_MS, 60000),
   PYTHON_BIN: process.env.PYTHON_BIN,
   PYTHON_VENV_DIR: process.env.PYTHON_VENV_DIR || 'packages/python',
   PIP_INDEX_URL: process.env.PIP_INDEX_URL,
