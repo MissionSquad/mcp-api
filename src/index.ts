@@ -94,13 +94,16 @@ export class API {
     // Set up circular dependency between MCPService and PackageService
     mcpController.getMcpService().setPackageService(packagesController.getPackageService())
 
-    // Periodic resource-stats logging for mcp-api and its spawned MCP servers
+    // Periodic resource-stats logging for mcp-api and its spawned MCP servers.
+    // Registered at the FRONT of resources so shutDown() stops it first: sampling
+    // must cease before the MCP/package services it samples begin tearing down,
+    // otherwise a tick mid-shutdown would spawn `ps` and log stale stats.
     const resourceStatsService = new ResourceStatsService({
       intervalMs: env.RESOURCE_STATS_INTERVAL_MS,
       getTrackedProcesses: () => mcpController.getMcpService().getStdioServerPids()
     })
     await resourceStatsService.init()
-    this.resources.push(resourceStatsService)
+    this.resources.unshift(resourceStatsService)
 
     app.get('/healthz', (req, res) => {
       console.log('Health checked')
