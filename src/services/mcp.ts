@@ -3849,12 +3849,17 @@ export class MCPService implements Resource {
   /**
    * Lists the OS process ids of currently running stdio MCP servers,
    * labeled by server name, for resource monitoring.
+   *
+   * Only servers with status 'connected' are included: `connection` is not
+   * cleared on transport close, so a disconnected/error server could otherwise
+   * contribute a stale pid and mislabel an unrelated process if the OS reused it.
    */
   public getStdioServerPids(): { name: string; pid: number }[] {
     const tracked: { name: string; pid: number }[] = []
     for (const serverKey of Object.keys(this.servers)) {
       const server = this.servers[serverKey]
       if (server.transportType !== 'stdio') continue
+      if (server.status !== 'connected') continue
       const transport = server.connection?.transport
       if (!transport) continue
       const pid = getStdioTransportPid(transport)
