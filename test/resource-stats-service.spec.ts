@@ -75,4 +75,12 @@ describe('ResourceStatsService.stop', () => {
     expect(mockSampleProcessTree).not.toHaveBeenCalled()
     await expect(service.stop()).resolves.toBeUndefined()
   })
+
+  it('is disabled when the interval is not a finite number', async () => {
+    const service = new ResourceStatsService({ intervalMs: NaN, getTrackedProcesses: () => [] })
+    await service.init()
+    jest.advanceTimersByTime(60000)
+    await flushMicrotasks()
+    expect(mockSampleProcessTree).not.toHaveBeenCalled()
+  })
 })

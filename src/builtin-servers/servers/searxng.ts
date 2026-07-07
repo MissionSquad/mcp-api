@@ -287,13 +287,14 @@ export class BuiltInSearxngServer extends BaseBuiltInServer {
     if (this.stopped) {
       return
     }
+    let scraper: PuppeteerScraper | undefined
     try {
       log({
         level: 'info',
         msg: `Starting Puppeteer initialization (Attempt ${retryCount + 1}/${this.MAX_PUPPETEER_RETRIES})...`
       })
 
-      const scraper = new PuppeteerScraper({
+      scraper = new PuppeteerScraper({
         headless: true,
         ignoreHTTPSErrors: true,
         blockResources: false,
@@ -319,6 +320,17 @@ export class BuiltInSearxngServer extends BaseBuiltInServer {
         msg: `Failed to initialize Puppeteer on attempt ${retryCount + 1}:`,
         error
       })
+
+      // Close any partially-created browser before retrying so repeated init
+      // failures cannot leak Chromium processes. closeBrowser() is a no-op if the
+      // scraper already cleaned up internally.
+      if (scraper) {
+        try {
+          await scraper.closeBrowser()
+        } catch (closeError) {
+          log({ level: 'error', msg: 'Error closing partially-initialized Puppeteer scraper', error: closeError })
+        }
+      }
 
       if (this.stopped) {
         return

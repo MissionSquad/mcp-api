@@ -45,6 +45,18 @@ describe('BuiltInSearxngServer Puppeteer lifecycle', () => {
     expect(jest.getTimerCount()).toBe(1)
   })
 
+  it('closes a partially-initialized browser when init fails, before retrying', async () => {
+    mockInit.mockRejectedValue(new Error('init failed'))
+    const server = new BuiltInSearxngServer()
+
+    await internals(server).initializePuppeteerWithRetries(0)
+
+    // The failed attempt's browser is closed in the catch so repeated failures
+    // cannot leak Chromium processes.
+    expect(mockScraperCtor).toHaveBeenCalledTimes(1)
+    expect(mockCloseBrowser).toHaveBeenCalledTimes(1)
+  })
+
   it('cancels the pending retry on stop() and ignores any later retry attempt', async () => {
     mockInit.mockRejectedValue(new Error('init failed'))
     const server = new BuiltInSearxngServer()

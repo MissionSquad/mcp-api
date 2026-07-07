@@ -177,22 +177,33 @@ export function shortenProcessLabel(command: string): string {
   return exe
 }
 
+// Bounds a single `ps` invocation. A normal `ps -eo` completes in milliseconds;
+// this ceiling exists only so a wedged `ps` cannot stall sampling (and, via
+// stop() awaiting the in-flight sample, shutdown) indefinitely.
+const PS_TIMEOUT_MS = 5000
+
 /**
  * Samples the full OS process tree with a single `ps` invocation.
  * Requires the `ps` utility (procps on Linux images — installed in the
  * Dockerfile; present by default on macOS/BSD).
  *
- * @throws Error when `ps` is unavailable or exits abnormally.
+ * @throws Error when `ps` is unavailable, times out ({@link PS_TIMEOUT_MS}), or
+ * exits abnormally.
  */
 export function sampleProcessTree(): Promise<ProcessSample[]> {
   return new Promise((resolve, reject) => {
-    execFile('ps', ['-eo', 'pid=,ppid=,rss=,pcpu=,command='], { maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
-      if (error) {
-        reject(error)
-        return
+    execFile(
+      'ps',
+      ['-eo', 'pid=,ppid=,rss=,pcpu=,command='],
+      { maxBuffer: 4 * 1024 * 1024, timeout: PS_TIMEOUT_MS },
+      (error, stdout) => {
+        if (error) {
+          reject(error)
+          return
+        }
+        resolve(parsePsOutput(stdout))
       }
-      resolve(parsePsOutput(stdout))
-    })
+    )
   })
 }
 

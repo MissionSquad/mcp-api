@@ -43,7 +43,10 @@ export class ResourceStatsService implements Resource {
 
   public async init(): Promise<void> {
     if (!Number.isFinite(this.intervalMs) || this.intervalMs <= 0) {
-      log({ level: 'info', msg: '[resource-stats] disabled (RESOURCE_STATS_INTERVAL_MS <= 0)' })
+      log({
+        level: 'info',
+        msg: `[resource-stats] disabled (RESOURCE_STATS_INTERVAL_MS must be a positive number of ms; got ${this.intervalMs})`
+      })
       return
     }
     this.lastCpuUsage = process.cpuUsage()
