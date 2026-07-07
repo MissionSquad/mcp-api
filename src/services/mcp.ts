@@ -920,7 +920,7 @@ const normalizeExternalAuthError = (
 }
 
 /**
- * Maximum number of in-memory log lines retained per MCP server and per
+ * Maximum number of in-memory log lines retained for each MCP server and each
  * per-user connection. Older lines are displaced once this count is exceeded.
  */
 export const MAX_SERVER_LOG_LINES = 500

@@ -60,4 +60,23 @@ describe('appendServerLog', () => {
     }
     expect(logs).toEqual(expected)
   })
+
+  it('stays bounded and correct under sustained high-volume appends (memory does not grow)', () => {
+    // Mirrors the exact scenario the cap guards against: a chatty stdio server
+    // streaming stderr lines for the whole process lifetime. The array must never
+    // exceed the cap regardless of how many lines are pushed.
+    const logs: string[] = []
+    const VOLUME = 100_000
+    let peak = 0
+    for (let i = 0; i < VOLUME; i++) {
+      appendServerLog(logs, `evt-${i}`)
+      if (logs.length > peak) peak = logs.length
+    }
+    // Peak length never exceeded the cap at any point during the run.
+    expect(peak).toBe(MAX_SERVER_LOG_LINES)
+    expect(logs.length).toBe(MAX_SERVER_LOG_LINES)
+    // Only the most recent 500 of the 100k lines survive, in order.
+    expect(logs[0]).toBe(`evt-${VOLUME - MAX_SERVER_LOG_LINES}`)
+    expect(logs[logs.length - 1]).toBe(`evt-${VOLUME - 1}`)
+  })
 })

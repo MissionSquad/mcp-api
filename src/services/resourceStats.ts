@@ -1,10 +1,11 @@
-import { Resource } from '..'
+import type { Resource } from '..'
 import { log } from '../utils/general'
 import {
   SubtreeSample,
   aggregateDirectChildSubtrees,
   formatMebibytes,
-  sampleProcessTree
+  sampleProcessTree,
+  shortenProcessLabel
 } from '../utils/resourceStats'
 
 export interface TrackedProcess {
@@ -105,7 +106,7 @@ export class ResourceStatsService implements Resource {
     }
 
     for (const subtree of subtrees) {
-      const name = nameByPid.get(subtree.rootPid) ?? subtree.command
+      const name = nameByPid.get(subtree.rootPid) ?? shortenProcessLabel(subtree.command)
       log({
         level: 'info',
         msg:

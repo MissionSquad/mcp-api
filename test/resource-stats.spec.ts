@@ -4,7 +4,8 @@ import {
   formatMebibytes,
   getStdioTransportPid,
   parsePsOutput,
-  sampleProcessTree
+  sampleProcessTree,
+  shortenProcessLabel
 } from '../src/utils/resourceStats'
 
 describe('parsePsOutput', () => {
@@ -120,5 +121,41 @@ describe('formatMebibytes', () => {
   it('formats bytes as MB with one decimal', () => {
     expect(formatMebibytes(412.3 * 1024 * 1024)).toBe('412.3MB')
     expect(formatMebibytes(0)).toBe('0.0MB')
+  })
+})
+
+describe('shortenProcessLabel', () => {
+  it('returns the executable basename for a non-runtime command', () => {
+    expect(shortenProcessLabel('/opt/google/chrome/chrome --type=renderer --no-sandbox')).toBe('chrome')
+    expect(shortenProcessLabel('/usr/lib/chromium/chromium --headless')).toBe('chromium')
+  })
+
+  it('appends the script basename for language runtimes so siblings stay distinct', () => {
+    expect(
+      shortenProcessLabel('node ./packages/missionsquad-mcp-rss/node_modules/@missionsquad/mcp-rss/dist/index.js')
+    ).toBe('node index.js')
+    expect(shortenProcessLabel('/usr/local/bin/node /app/dist/server.js --port 8080')).toBe('node server.js')
+    expect(shortenProcessLabel('python3 /app/tools/worker.py')).toBe('python3 worker.py')
+  })
+
+  it('skips leading flags when locating the script token', () => {
+    expect(shortenProcessLabel('node --inspect --enable-source-maps /app/dist/index.js')).toBe('node index.js')
+  })
+
+  it('returns just the runtime when it has no script argument', () => {
+    expect(shortenProcessLabel('node')).toBe('node')
+    expect(shortenProcessLabel('node --version')).toBe('node')
+  })
+
+  it('does not leak trailing command-line arguments into the label', () => {
+    const label = shortenProcessLabel('node /app/dist/index.js --api-key=SUPER_SECRET --token abc123')
+    expect(label).toBe('node index.js')
+    expect(label).not.toContain('SUPER_SECRET')
+    expect(label).not.toContain('abc123')
+  })
+
+  it('falls back to "unknown" for an empty command', () => {
+    expect(shortenProcessLabel('')).toBe('unknown')
+    expect(shortenProcessLabel('   ')).toBe('unknown')
   })
 })

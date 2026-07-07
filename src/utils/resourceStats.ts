@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { basename } from 'node:path'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 
@@ -38,9 +39,11 @@ export function getStdioTransportPid(transport: Transport): number | undefined {
 }
 
 /**
- * Parses `ps -eo pid=,ppid=,rss=,pcpu=,comm=` output.
+ * Parses `ps -eo pid=,ppid=,rss=,pcpu=,command=` output.
  * rss is reported by ps in kilobytes on both Linux (procps) and macOS (BSD ps).
- * The command field may contain spaces, so it is everything after the fourth column.
+ * `command` is the full command line (may contain spaces), so it is everything
+ * after the fourth column. Use {@link shortenProcessLabel} to derive a concise,
+ * argument-free label for logging.
  */
 export function parsePsOutput(output: string): ProcessSample[] {
   const samples: ProcessSample[] = []
@@ -101,14 +104,41 @@ export function aggregateDirectChildSubtrees(samples: ProcessSample[], rootPid: 
   return subtrees
 }
 
+const RUNTIME_EXECUTABLES = new Set(['node', 'nodejs', 'python', 'python3', 'bun', 'deno', 'ts-node'])
+
+/**
+ * Derives a concise, human-readable label from a full `ps command=` string for
+ * use in log lines. Returns the executable basename; for language runtimes
+ * (node/python/...) it also appends the script basename so that otherwise
+ * identical `node` processes stay distinguishable. Only executable and script
+ * basenames are used — full arguments are intentionally dropped so they never
+ * reach the logs (avoids leaking any sensitive values passed on the command
+ * line and keeps labels readable).
+ */
+export function shortenProcessLabel(command: string): string {
+  const trimmed = command.trim()
+  if (!trimmed) return 'unknown'
+  const tokens = trimmed.split(/\s+/)
+  const exe = basename(tokens[0])
+  if (RUNTIME_EXECUTABLES.has(exe)) {
+    const scriptToken = tokens.slice(1).find((token) => !token.startsWith('-'))
+    if (scriptToken) {
+      return `${exe} ${basename(scriptToken)}`
+    }
+  }
+  return exe
+}
+
 /**
  * Samples the full OS process tree with a single `ps` invocation.
+ * Requires the `ps` utility (procps on Linux images — installed in the
+ * Dockerfile; present by default on macOS/BSD).
  *
  * @throws Error when `ps` is unavailable or exits abnormally.
  */
 export function sampleProcessTree(): Promise<ProcessSample[]> {
   return new Promise((resolve, reject) => {
-    execFile('ps', ['-eo', 'pid=,ppid=,rss=,pcpu=,comm='], { maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+    execFile('ps', ['-eo', 'pid=,ppid=,rss=,pcpu=,command='], { maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
       if (error) {
         reject(error)
         return
