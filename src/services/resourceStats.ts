@@ -31,6 +31,7 @@ export class ResourceStatsService implements Resource {
   private readonly getTrackedProcesses: () => TrackedProcess[]
   private timer?: NodeJS.Timeout
   private sampling = false
+  private samplingPromise?: Promise<void>
   private lastCpuUsage = process.cpuUsage()
   private lastCpuSampleAt = process.hrtime.bigint()
   private treeSamplingBroken = false
@@ -54,12 +55,13 @@ export class ResourceStatsService implements Resource {
         return
       }
       this.sampling = true
-      this.logSample()
+      this.samplingPromise = this.logSample()
         .catch((error) => {
           log({ level: 'debug', msg: '[resource-stats] sampling failed', error })
         })
         .finally(() => {
           this.sampling = false
+          this.samplingPromise = undefined
         })
     }, this.intervalMs)
     // Never keep the process alive just to report stats
@@ -71,6 +73,11 @@ export class ResourceStatsService implements Resource {
     if (this.timer) {
       clearInterval(this.timer)
       this.timer = undefined
+    }
+    // Wait for any in-flight sample to finish so no sampling (spawning `ps`,
+    // logging) overlaps the teardown of the services this samples.
+    if (this.samplingPromise) {
+      await this.samplingPromise
     }
   }
 
