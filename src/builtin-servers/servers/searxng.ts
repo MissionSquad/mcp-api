@@ -12,6 +12,8 @@ export class BuiltInSearxngServer extends BaseBuiltInServer {
   
   private scraper: PuppeteerScraper | null = null
   private scraperReady = false
+  private stopped = false
+  private retryTimer: NodeJS.Timeout | null = null
   private readonly MAX_PUPPETEER_RETRIES = 5
   private readonly INITIAL_RETRY_DELAY_MS = 15000
   
@@ -97,6 +99,13 @@ export class BuiltInSearxngServer extends BaseBuiltInServer {
   }
   
   async stop(): Promise<void> {
+    // Mark stopped and cancel any pending init retry so a scheduled attempt
+    // cannot recreate the scraper/browser after shutdown.
+    this.stopped = true
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer)
+      this.retryTimer = null
+    }
     if (this.scraper) {
       try {
         await this.scraper.closeBrowser()
@@ -274,38 +283,60 @@ export class BuiltInSearxngServer extends BaseBuiltInServer {
   }
   
   private async initializePuppeteerWithRetries(retryCount = 0): Promise<void> {
+    // Bail out if the server was stopped before this (possibly delayed) attempt ran.
+    if (this.stopped) {
+      return
+    }
     try {
-      log({ 
-        level: 'info', 
-        msg: `Starting Puppeteer initialization (Attempt ${retryCount + 1}/${this.MAX_PUPPETEER_RETRIES})...` 
+      log({
+        level: 'info',
+        msg: `Starting Puppeteer initialization (Attempt ${retryCount + 1}/${this.MAX_PUPPETEER_RETRIES})...`
       })
-      
-      this.scraper = new PuppeteerScraper({
+
+      const scraper = new PuppeteerScraper({
         headless: true,
         ignoreHTTPSErrors: true,
         blockResources: false,
         cacheSize: 1000,
         enableGPU: false
       })
-      
-      await this.scraper.init()
+
+      await scraper.init()
+
+      // stop() may have been called while init() was in flight; if so, close the
+      // freshly created browser instead of publishing it.
+      if (this.stopped) {
+        await scraper.closeBrowser()
+        return
+      }
+
+      this.scraper = scraper
       this.scraperReady = true
       log({ level: 'info', msg: 'Puppeteer initialized successfully.' })
     } catch (error) {
-      log({ 
-        level: 'error', 
-        msg: `Failed to initialize Puppeteer on attempt ${retryCount + 1}:`, 
-        error 
+      log({
+        level: 'error',
+        msg: `Failed to initialize Puppeteer on attempt ${retryCount + 1}:`,
+        error
       })
-      
+
+      if (this.stopped) {
+        return
+      }
+
       if (retryCount < this.MAX_PUPPETEER_RETRIES - 1) {
         const delay = this.INITIAL_RETRY_DELAY_MS * Math.pow(2, retryCount)
         log({ level: 'info', msg: `Retrying in ${delay / 1000} seconds...` })
-        setTimeout(() => this.initializePuppeteerWithRetries(retryCount + 1), delay)
+        this.retryTimer = setTimeout(() => {
+          this.retryTimer = null
+          this.initializePuppeteerWithRetries(retryCount + 1)
+        }, delay)
+        // Do not keep the process alive solely for a pending retry.
+        this.retryTimer.unref()
       } else {
-        log({ 
-          level: 'error', 
-          msg: 'Max retries reached. Puppeteer initialization failed permanently for this session.' 
+        log({
+          level: 'error',
+          msg: 'Max retries reached. Puppeteer initialization failed permanently for this session.'
         })
       }
     }

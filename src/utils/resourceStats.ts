@@ -105,15 +105,28 @@ export function aggregateDirectChildSubtrees(samples: ProcessSample[], rootPid: 
 }
 
 const RUNTIME_EXECUTABLES = new Set(['node', 'nodejs', 'python', 'python3', 'bun', 'deno', 'ts-node'])
+const SCRIPT_FILE_PATTERN = /\.(m?[jt]s|cjs|py|sh)$/i
+
+/**
+ * True when a token looks like a path to a script file rather than an arbitrary
+ * argument value: it either contains a path separator or ends in a known script
+ * extension. Used to ensure {@link shortenProcessLabel} only surfaces genuine
+ * script paths — never inline code passed to eval flags (`node -e <code>`,
+ * `python -c <code>`) or other argument values.
+ */
+function looksLikeScriptPath(token: string): boolean {
+  return token.includes('/') || SCRIPT_FILE_PATTERN.test(token)
+}
 
 /**
  * Derives a concise, human-readable label from a full `ps command=` string for
  * use in log lines. Returns the executable basename; for language runtimes
  * (node/python/...) it also appends the script basename so that otherwise
- * identical `node` processes stay distinguishable. Only executable and script
- * basenames are used — full arguments are intentionally dropped so they never
- * reach the logs (avoids leaking any sensitive values passed on the command
- * line and keeps labels readable).
+ * identical `node` processes stay distinguishable. Only executable and
+ * script-file basenames are used — arbitrary arguments (including inline code
+ * after `-e`/`-c`) are intentionally dropped so they never reach the logs
+ * (avoids leaking sensitive values passed on the command line and keeps labels
+ * readable).
  */
 export function shortenProcessLabel(command: string): string {
   const trimmed = command.trim()
@@ -121,7 +134,7 @@ export function shortenProcessLabel(command: string): string {
   const tokens = trimmed.split(/\s+/)
   const exe = basename(tokens[0])
   if (RUNTIME_EXECUTABLES.has(exe)) {
-    const scriptToken = tokens.slice(1).find((token) => !token.startsWith('-'))
+    const scriptToken = tokens.slice(1).find((token) => !token.startsWith('-') && looksLikeScriptPath(token))
     if (scriptToken) {
       return `${exe} ${basename(scriptToken)}`
     }

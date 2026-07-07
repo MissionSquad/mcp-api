@@ -154,6 +154,23 @@ describe('shortenProcessLabel', () => {
     expect(label).not.toContain('abc123')
   })
 
+  it('does not treat inline eval/print code as a script (no arg leakage)', () => {
+    // The token after -e/-c is code, not a script path; it must never appear in the label.
+    expect(shortenProcessLabel('node -e SUPER_SECRET_CODE')).toBe('node')
+    expect(shortenProcessLabel('node --eval SUPER_SECRET_CODE')).toBe('node')
+    expect(shortenProcessLabel('python -c import os,sys;print(SECRET)')).toBe('python')
+    expect(shortenProcessLabel('node -p process.env.TOKEN')).toBe('node')
+    expect(shortenProcessLabel('node -e SUPER_SECRET_CODE')).not.toContain('SUPER_SECRET_CODE')
+  })
+
+  it('only appends a token that looks like a script path (has a separator or known extension)', () => {
+    // Bare non-file arg -> just the runtime.
+    expect(shortenProcessLabel('node server')).toBe('node')
+    // Recognizable script forms -> runtime + script basename.
+    expect(shortenProcessLabel('node worker.mjs')).toBe('node worker.mjs')
+    expect(shortenProcessLabel('ts-node ./src/index.ts')).toBe('ts-node index.ts')
+  })
+
   it('falls back to "unknown" for an empty command', () => {
     expect(shortenProcessLabel('')).toBe('unknown')
     expect(shortenProcessLabel('   ')).toBe('unknown')

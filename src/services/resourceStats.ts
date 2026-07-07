@@ -30,6 +30,7 @@ export class ResourceStatsService implements Resource {
   private readonly intervalMs: number
   private readonly getTrackedProcesses: () => TrackedProcess[]
   private timer?: NodeJS.Timeout
+  private sampling = false
   private lastCpuUsage = process.cpuUsage()
   private lastCpuSampleAt = process.hrtime.bigint()
   private treeSamplingBroken = false
@@ -47,9 +48,19 @@ export class ResourceStatsService implements Resource {
     this.lastCpuUsage = process.cpuUsage()
     this.lastCpuSampleAt = process.hrtime.bigint()
     this.timer = setInterval(() => {
-      this.logSample().catch((error) => {
-        log({ level: 'debug', msg: '[resource-stats] sampling failed', error })
-      })
+      // Skip this tick if the previous sample is still running (e.g. a slow or
+      // blocked `ps`), so overlapping samples never pile up.
+      if (this.sampling) {
+        return
+      }
+      this.sampling = true
+      this.logSample()
+        .catch((error) => {
+          log({ level: 'debug', msg: '[resource-stats] sampling failed', error })
+        })
+        .finally(() => {
+          this.sampling = false
+        })
     }, this.intervalMs)
     // Never keep the process alive just to report stats
     this.timer.unref()
