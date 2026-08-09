@@ -16,6 +16,7 @@ import type { McpUserSessions } from '../services/userSessions'
 import type { InstallUserServerInput, UpdateUserServerInstallInput, McpUserServerInstalls } from '../services/userServerInstalls'
 import { McpValidationError, toMcpErrorResponse } from '../services/mcpErrors'
 import type { ExternalOAuthProvisioningContext } from '../services/dcrClients'
+import type { ServiceHmacProvider } from '../services/serviceHmac'
 
 export interface ToolCallRequest {
   username: string
@@ -66,7 +67,8 @@ export class MCPController implements Resource {
     oauthTokensService,
     userSessionsService,
     userServerInstalls,
-    dcrClients
+    dcrClients,
+    serviceHmacProvider
   }: {
     app: Express
     mongoParams: MongoConnectionParams
@@ -75,6 +77,7 @@ export class MCPController implements Resource {
     userSessionsService?: McpUserSessions
     userServerInstalls: McpUserServerInstalls
     dcrClients?: import('../services/dcrClients').McpDcrClients
+    serviceHmacProvider: ServiceHmacProvider
   }) {
     this.app = app
     this.mcpService = new MCPService({
@@ -83,7 +86,8 @@ export class MCPController implements Resource {
       oauthTokensService,
       userSessionsService,
       userServerInstalls,
-      dcrClients
+      dcrClients,
+      serviceHmacProvider
     })
   }
 
@@ -136,6 +140,7 @@ export class MCPController implements Resource {
           description: server.description,
           source: server.source,
           authMode: server.authMode,
+          serviceHmacProfile: server.serviceHmacProfile,
           oauthTemplate: server.oauthTemplate,
           secretFields: server.secretFields,
           homepageUrl: server.homepageUrl,

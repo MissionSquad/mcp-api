@@ -8,7 +8,7 @@ import {
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { UnauthorizedError, type OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
 import { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js'
-import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
+import { Transport, type FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { CallToolResultSchema, ListToolsResultSchema } from '@modelcontextprotocol/sdk/types.js'
 import { Resource } from '..'
 import { BuiltInServer, BuiltInServerRegistry } from '../builtin-servers'
@@ -40,10 +40,17 @@ import {
   McpServerNotFoundError,
   McpAuthNotConnectedError,
   McpDiscoveryFailedError,
-  McpServerAlreadyExistsError
+  McpServerAlreadyExistsError,
+  McpServiceHmacUnavailableError
 } from './mcpErrors'
 import { validateExternalMcpUrl } from '../utils/ssrf'
 import { getStdioTransportPid } from '../utils/resourceStats'
+import {
+  COMMS_MANAGEMENT_HMAC_PROFILE,
+  COMMS_MANAGEMENT_MCP_URL,
+  type ServiceHmacProvider,
+  type ServiceHmacProfile
+} from './serviceHmac'
 
 export interface MCPConnection {
   client: Client
@@ -70,7 +77,7 @@ export type ToolsList = {
 
 export type MCPTransportType = 'stdio' | 'streamable_http'
 export type McpServerSource = 'platform' | 'external'
-export type McpServerAuthMode = 'none' | 'oauth2'
+export type McpServerAuthMode = 'none' | 'oauth2' | 'service_hmac'
 export type McpExternalOAuthDiscoverySource = 'prm' | 'issuer_override'
 
 export interface McpExternalOAuthAuthorizationRequestParam {
@@ -165,6 +172,7 @@ type MCPServerBase = {
   description?: string
   source?: McpServerSource
   authMode?: McpServerAuthMode
+  serviceHmacProfile?: ServiceHmacProfile
   oauthTemplate?: McpExternalOAuthTemplate
   secretFields?: McpExternalSecretField[]
   homepageUrl?: string
@@ -219,6 +227,7 @@ export type AddServerInput = {
   headers?: Record<string, string>
   reconnectionOptions?: StreamableHTTPReconnectionOptions
   authMode?: McpServerAuthMode
+  serviceHmacProfile?: ServiceHmacProfile
   oauthTemplate?: McpExternalOAuthTemplate
   secretFields?: McpExternalSecretField[]
   homepageUrl?: string
@@ -251,6 +260,7 @@ export type UpdateServerInput = {
   headers?: Record<string, string>
   reconnectionOptions?: StreamableHTTPReconnectionOptions
   authMode?: McpServerAuthMode
+  serviceHmacProfile?: ServiceHmacProfile
   oauthTemplate?: McpExternalOAuthTemplate
   secretFields?: McpExternalSecretField[]
   homepageUrl?: string
@@ -281,6 +291,7 @@ export interface UserVisibleMcpServer {
   transportType: MCPTransportType
   url?: string
   authMode?: McpServerAuthMode
+  serviceHmacProfile?: ServiceHmacProfile
   installed: boolean
   enabled: boolean
   authState?: UserInstallAuthState
@@ -382,6 +393,87 @@ export const assertTransportConfigCompatible = (config: {
     throw new Error('Stdio servers cannot define streamable HTTP fields (url, headers, sessionId, reconnectionOptions).')
   }
 }
+
+type ServiceHmacServerValidationState = {
+  source?: unknown
+  transportType?: unknown
+  authMode?: unknown
+  serviceHmacProfile?: unknown
+  url?: unknown
+  headers?: unknown
+  sessionId?: unknown
+  oauthTemplate?: unknown
+  oauthClientConfig?: unknown
+  oauthProvisioningContext?: unknown
+  secretFields?: unknown
+  secretName?: unknown
+  secretNames?: unknown
+  username?: unknown
+}
+
+export const assertServiceHmacServerConfiguration = (
+  config: ServiceHmacServerValidationState
+): void => {
+  const authMode = config.authMode ?? 'none'
+  if (authMode !== 'none' && authMode !== 'oauth2' && authMode !== 'service_hmac') {
+    throw new McpValidationError('Invalid MCP server authMode.')
+  }
+
+  const selectsServiceHmac = authMode === 'service_hmac' || config.serviceHmacProfile !== undefined
+  if (!selectsServiceHmac) {
+    return
+  }
+  if (authMode !== 'service_hmac') {
+    throw new McpValidationError('serviceHmacProfile requires authMode service_hmac.')
+  }
+  if (config.source !== 'platform') {
+    throw new McpValidationError('service_hmac requires source platform.')
+  }
+  if (config.transportType !== 'streamable_http') {
+    throw new McpValidationError('service_hmac requires streamable_http transport.')
+  }
+  if (config.serviceHmacProfile !== COMMS_MANAGEMENT_HMAC_PROFILE) {
+    throw new McpValidationError('service_hmac requires serviceHmacProfile comms_management.')
+  }
+  if (config.url !== COMMS_MANAGEMENT_MCP_URL) {
+    throw new McpValidationError(`service_hmac requires url ${COMMS_MANAGEMENT_MCP_URL}.`)
+  }
+
+  const forbiddenFields: Array<[keyof ServiceHmacServerValidationState, unknown]> = [
+    ['headers', config.headers],
+    ['sessionId', config.sessionId],
+    ['oauthTemplate', config.oauthTemplate],
+    ['oauthClientConfig', config.oauthClientConfig],
+    ['oauthProvisioningContext', config.oauthProvisioningContext],
+    ['secretFields', config.secretFields],
+    ['secretName', config.secretName],
+    ['secretNames', config.secretNames],
+    ['username', config.username]
+  ]
+  const configuredForbiddenFields = forbiddenFields
+    .filter(([, value]) => value !== undefined)
+    .map(([field]) => field)
+  if (configuredForbiddenFields.length > 0) {
+    throw new McpValidationError(
+      `service_hmac cannot define ${configuredForbiddenFields.join(', ')}.`
+    )
+  }
+}
+
+export type ServiceHmacMcpServer = MCPServer &
+  StreamableHttpServerConfig & {
+    source: 'platform'
+    authMode: 'service_hmac'
+    serviceHmacProfile: typeof COMMS_MANAGEMENT_HMAC_PROFILE
+    url: typeof COMMS_MANAGEMENT_MCP_URL
+  }
+
+export const isServiceHmacServer = (server: MCPServer): server is ServiceHmacMcpServer =>
+  server.source === 'platform' &&
+  server.transportType === 'streamable_http' &&
+  server.authMode === 'service_hmac' &&
+  server.serviceHmacProfile === COMMS_MANAGEMENT_HMAC_PROFILE &&
+  server.url === COMMS_MANAGEMENT_MCP_URL
 
 const isStreamableHTTPTransport = (transport: Transport): transport is StreamableHTTPClientTransport =>
   typeof (transport as StreamableHTTPClientTransport).terminateSession === 'function'
@@ -817,6 +909,7 @@ const summarizeUrlForLog = (value: string | undefined): string | undefined => {
 export type TransportFactoryOptions = {
   requestInit?: RequestInit
   authProvider?: OAuthClientProvider
+  fetch?: FetchLike
   sessionId?: string
   url?: string
 }
@@ -828,7 +921,8 @@ export const createTransport = (server: MCPServer, options: TransportFactoryOpti
       requestInit,
       sessionId: options.sessionId,
       reconnectionOptions: server.reconnectionOptions,
-      authProvider: options.authProvider
+      authProvider: options.authProvider,
+      fetch: options.fetch
     })
   }
 
@@ -840,14 +934,15 @@ export const createTransport = (server: MCPServer, options: TransportFactoryOpti
   })
 }
 
-const createSseTransport = (
+export const createSseTransport = (
   server: StreamableHttpServerConfig,
   options: TransportFactoryOptions = {}
 ): Transport => {
   const requestInit = options.requestInit ?? buildRequestInit(server.headers)
   return new SSEClientTransport(new URL(options.url ?? server.url), {
     requestInit,
-    authProvider: options.authProvider
+    authProvider: options.authProvider,
+    fetch: options.fetch
   })
 }
 
@@ -955,6 +1050,7 @@ export class MCPService implements Resource {
   private oauthTokensService?: McpOAuthTokens
   private userSessionsService?: McpUserSessions
   private dcrClients?: McpDcrClients
+  private serviceHmacProvider?: ServiceHmacProvider
   public userServerInstalls: McpUserServerInstalls
   private mongoParams: MongoConnectionParams
   private packageService?: any // Will be set after initialization to avoid circular dependency
@@ -965,7 +1061,8 @@ export class MCPService implements Resource {
     oauthTokensService,
     userSessionsService,
     userServerInstalls,
-    dcrClients
+    dcrClients,
+    serviceHmacProvider
   }: {
     mongoParams: MongoConnectionParams
     secretsService: Secrets
@@ -973,6 +1070,7 @@ export class MCPService implements Resource {
     userSessionsService?: McpUserSessions
     userServerInstalls: McpUserServerInstalls
     dcrClients?: McpDcrClients
+    serviceHmacProvider?: ServiceHmacProvider
   }) {
     this.mongoParams = mongoParams
     this.mcpDBClient = new MongoDBClient<MCPServerRecord>(mongoParams, mcpIndexes)
@@ -981,6 +1079,7 @@ export class MCPService implements Resource {
     this.userSessionsService = userSessionsService
     this.userServerInstalls = userServerInstalls
     this.dcrClients = dcrClients
+    this.serviceHmacProvider = serviceHmacProvider
   }
 
   private async fetchDiscoveryResponse(url: string, discoveryDeadlineMs: number): Promise<Response> {
@@ -1638,6 +1737,7 @@ export class MCPService implements Resource {
   }
 
   private async normalizeServerRecord(server: MCPServerRecord): Promise<MCPServer> {
+    assertServiceHmacServerConfiguration(server)
     const withSecrets = await this.migrateServerSecrets(server)
     if (this.shouldBackfillExternalOAuthResourceUri(withSecrets)) {
       this.scheduleExternalOAuthResourceUriBackfill(withSecrets)
@@ -1653,6 +1753,12 @@ export class MCPService implements Resource {
   private async buildTransportOptions(server: MCPServer, username?: string): Promise<TransportFactoryOptions> {
     if (server.transportType !== 'streamable_http') {
       return {}
+    }
+
+    assertServiceHmacServerConfiguration(server)
+    if (isServiceHmacServer(server)) {
+      this.assertServiceHmacReady()
+      return { fetch: this.serviceHmacProvider!.createSignedFetch() }
     }
 
     const runtimeUrl =
@@ -1709,6 +1815,13 @@ export class MCPService implements Resource {
       requestInit: buildRequestInit(sanitizedHeaders ?? {}),
       ...(runtimeUrl ? { url: runtimeUrl } : {})
     }
+  }
+
+  private assertServiceHmacReady(): void {
+    if (!this.serviceHmacProvider) {
+      throw new McpServiceHmacUnavailableError(COMMS_MANAGEMENT_HMAC_PROFILE)
+    }
+    this.serviceHmacProvider.assertReady()
   }
 
   private async persistUserSessionId(
@@ -2013,6 +2126,7 @@ export class MCPService implements Resource {
       source,
       transportType: server.transportType,
       authMode,
+      serviceHmacProfile: server.serviceHmacProfile,
       installed,
       enabled,
       authState,
@@ -2415,6 +2529,11 @@ export class MCPService implements Resource {
       throw new Error(`connectUserToServer is only for streamable_http servers, got ${server.transportType}`)
     }
 
+    assertServiceHmacServerConfiguration(server)
+    if (isServiceHmacServer(server)) {
+      this.assertServiceHmacReady()
+    }
+
     const userKey = buildUserServerKey(username, server.name)
 
     // Check if already connected
@@ -2447,7 +2566,12 @@ export class MCPService implements Resource {
       throw new Error(`connectUserToServer is only for streamable_http servers, got ${server.transportType}`)
     }
 
-    await validateExternalMcpUrl(server.url)
+    assertServiceHmacServerConfiguration(server)
+    if (isServiceHmacServer(server)) {
+      this.assertServiceHmacReady()
+    } else {
+      await validateExternalMcpUrl(server.url)
+    }
 
     const userKey = buildUserServerKey(username, server.name)
 
@@ -2477,6 +2601,9 @@ export class MCPService implements Resource {
       const conn = this.userConnections[userKey]
       if (conn) {
         appendServerLog(conn.logs, error.message)
+        if (error instanceof McpServiceHmacUnavailableError) {
+          conn.status = 'error'
+        }
       }
     }
 
@@ -2488,12 +2615,17 @@ export class MCPService implements Resource {
       }
     }
 
+    let serviceHmacTransportOptions: TransportFactoryOptions | undefined
+
     try {
       const client = new Client(
         { name: 'MSQStdioClient', version: '1.0.0' },
         { capabilities: { prompts: {}, resources: {}, tools: {} } }
       )
       const transportOptions = await this.buildTransportOptions(server, username)
+      if (isServiceHmacServer(server)) {
+        serviceHmacTransportOptions = transportOptions
+      }
       const transport = createTransport(server, { ...transportOptions, sessionId })
 
       const userConn: UserConnection = {
@@ -2583,7 +2715,8 @@ export class MCPService implements Resource {
           { name: 'MSQStdioClient', version: '1.0.0' },
           { capabilities: { prompts: {}, resources: {}, tools: {} } }
         )
-        const transportOptions = await this.buildTransportOptions(server, username)
+        const transportOptions =
+          serviceHmacTransportOptions ?? await this.buildTransportOptions(server, username)
         const fallbackTransport = createSseTransport(server, transportOptions)
 
         fallbackTransport.onerror = transportErrorHandler
@@ -2940,7 +3073,7 @@ export class MCPService implements Resource {
 
     const install = await this.userServerInstalls.upsertInstall({
       ...input,
-      authMode: server.authMode ?? 'none'
+      authMode: server.authMode === 'oauth2' ? 'oauth2' : 'none'
     })
     return this.toUserVisibleServer(
       server,
@@ -2983,7 +3116,7 @@ export class MCPService implements Resource {
 
     const install = await this.userServerInstalls.upsertInstall({
       ...input,
-      authMode: server.authMode ?? 'none'
+      authMode: server.authMode === 'oauth2' ? 'oauth2' : 'none'
     })
     if (oauthConfigChanged) {
       if (this.oauthTokensService) {
@@ -3164,6 +3297,13 @@ export class MCPService implements Resource {
     const source: McpServerSource = serverData.source ?? 'platform'
     const sharedSessionId = (serverData as AddServerInput & { sessionId?: unknown }).sessionId
 
+    assertServiceHmacServerConfiguration({
+      ...serverData,
+      source,
+      transportType,
+      sessionId: sharedSessionId
+    })
+
     assertTransportConfigCompatible({
       transportType,
       command: serverData.command,
@@ -3184,6 +3324,7 @@ export class MCPService implements Resource {
       displayName,
       description,
       authMode,
+      serviceHmacProfile,
       oauthTemplate,
       secretFields,
       homepageUrl,
@@ -3315,9 +3456,10 @@ export class MCPService implements Resource {
         displayName: displayName ?? name,
         description: description ?? '',
         source,
-        authMode: source === 'external' ? authMode ?? 'none' : 'none',
+        authMode: authMode === 'service_hmac' ? 'service_hmac' : source === 'external' ? authMode ?? 'none' : 'none',
+        serviceHmacProfile,
         oauthTemplate: normalizedOauthTemplate,
-        secretFields: effectiveSecretFields ?? [],
+        secretFields: authMode === 'service_hmac' ? undefined : effectiveSecretFields ?? [],
         homepageUrl,
         repositoryUrl,
         licenseName,
@@ -3369,6 +3511,7 @@ export class MCPService implements Resource {
       }
     }
 
+    assertServiceHmacServerConfiguration(server)
     await this.mcpDBClient.insert(server)
 
     if (source === 'external' && username) {
@@ -3376,7 +3519,7 @@ export class MCPService implements Resource {
         serverName: name,
         username,
         enabled,
-        authMode: authMode ?? 'none',
+        authMode: authMode === 'oauth2' ? 'oauth2' : 'none',
         oauthClientId: serverData.oauthClientConfig?.clientId,
         oauthClientSecret: serverData.oauthClientConfig?.clientSecret,
         oauthScopes: serverData.oauthClientConfig?.scopes
@@ -3422,13 +3565,29 @@ export class MCPService implements Resource {
       throw new Error(`Server with name ${name} not found`)
     }
 
+    const nextTransportType: MCPTransportType =
+      serverData.transportType ?? existingRecord.transportType ?? 'stdio'
+    assertServiceHmacServerConfiguration({
+      source: serverData.source ?? existingRecord.source,
+      transportType: nextTransportType,
+      authMode: serverData.authMode ?? existingRecord.authMode,
+      serviceHmacProfile: serverData.serviceHmacProfile ?? existingRecord.serviceHmacProfile,
+      url: serverData.url ?? existingRecord.url,
+      headers: serverData.headers ?? existingRecord.headers,
+      sessionId: sharedSessionId ?? existingRecord.sessionId,
+      oauthTemplate: serverData.oauthTemplate ?? existingRecord.oauthTemplate,
+      secretFields: serverData.secretFields ?? existingRecord.secretFields,
+      secretName: serverData.secretName ?? existingRecord.secretName,
+      secretNames: serverData.secretNames ?? existingRecord.secretNames,
+      username: serverData.username
+    })
+
     const existingServer = await this.normalizeServerRecord({
       ...existingRecord,
       status: existingRecord.status ?? 'disconnected',
       enabled: existingRecord.enabled !== false
     })
 
-    const nextTransportType: MCPTransportType = serverData.transportType ?? existingServer.transportType
     assertTransportConfigCompatible({
       transportType: nextTransportType,
       command: serverData.command,
@@ -3469,6 +3628,7 @@ export class MCPService implements Resource {
       description: serverData.description ?? existingServer.description,
       source: serverData.source ?? existingServer.source,
       authMode: serverData.authMode ?? existingServer.authMode,
+      serviceHmacProfile: serverData.serviceHmacProfile ?? existingServer.serviceHmacProfile,
       oauthTemplate: serverData.oauthTemplate ?? existingServer.oauthTemplate,
       secretFields: serverData.secretFields ?? existingServer.secretFields,
       homepageUrl: serverData.homepageUrl ?? existingServer.homepageUrl,
@@ -3507,15 +3667,7 @@ export class MCPService implements Resource {
       if (!url) {
         throw new Error('Streamable HTTP servers require a url.')
       }
-      if ((baseServer.source ?? 'platform') === 'external') {
-        const knownProviderUrlError = getKnownProviderUrlError(url)
-        if (knownProviderUrlError) {
-          throw new McpValidationError(knownProviderUrlError)
-        }
-        await validateExternalMcpUrl(url)
-      } else {
-        new URL(url)
-      }
+      new URL(url)
 
       updatedServer = {
         ...baseServer,
@@ -3545,7 +3697,12 @@ export class MCPService implements Resource {
       }
     }
 
+    assertServiceHmacServerConfiguration(updatedServer)
     if ((updatedServer.source ?? 'platform') === 'external' && updatedServer.transportType === 'streamable_http') {
+      const knownProviderUrlError = getKnownProviderUrlError(updatedServer.url)
+      if (knownProviderUrlError) {
+        throw new McpValidationError(knownProviderUrlError)
+      }
       await validateExternalMcpUrl(updatedServer.url)
       const normalizedOauthTemplate = await this.normalizeExternalOAuthTemplateForPersistence(
         updatedServer.authMode ?? 'none',
@@ -3629,6 +3786,9 @@ export class MCPService implements Resource {
     }
     if (server.transportType !== 'streamable_http') {
       throw new Error(`Server ${name} is not a streamable HTTP server`)
+    }
+    if (server.authMode === 'service_hmac') {
+      throw new McpValidationError('service_hmac servers do not accept user OAuth configuration')
     }
 
     const tokenType = input.tokenType || 'Bearer'

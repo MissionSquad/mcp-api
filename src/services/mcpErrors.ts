@@ -4,6 +4,7 @@ export type McpErrorCode =
   | 'server_disabled'
   | 'auth_not_connected'
   | 'reauth_required'
+  | 'service_unavailable'
   | 'server_already_exists'
   | 'discovery_failed'
 
@@ -15,6 +16,7 @@ export type McpErrorResponseBody = {
   serverName?: string
   username?: string
   authorizationUrl?: string
+  serviceHmacProfile?: string
   server?: unknown
   attemptedUrls?: string[]
   cause?: string
@@ -107,6 +109,20 @@ export class McpReauthRequiredError extends McpApiError {
         username,
         authorizationUrl
       }
+    })
+  }
+}
+
+export class McpServiceHmacUnavailableError extends McpApiError {
+  constructor(
+    serviceHmacProfile: string,
+    message = `Service-HMAC profile ${serviceHmacProfile} is unavailable.`
+  ) {
+    super({
+      message,
+      code: 'service_unavailable',
+      statusCode: 503,
+      details: { serviceHmacProfile }
     })
   }
 }

@@ -83,6 +83,14 @@ The system uses AES-256-GCM encryption for all stored secrets, with a separate e
    PIP_EXTRA_INDEX_URL=
    ```
 
+   The optional Comms Management service-HMAC profile uses one additional environment variable:
+
+   ```text
+   MSQ_COMMS_MCP_HMAC_KEY_FILE=/absolute/path/to/a/mounted/keyring.json
+   ```
+
+   This value is an absolute secret-file path, not key material. The file must be a regular, non-symlink JSON file with mode `0400` or `0440` and the closed `SymmetricKeyring` shape used by the Comms Agent deployment contract. Do not reuse `SECRETS_KEY`, a user secret, an OAuth token, or another Mission Squad service keyring.
+
 5. Build the project:
 
    ```bash
@@ -115,6 +123,27 @@ docker run -p 8080:8080 --env-file .env mcp-api
 For Python MCP servers that require Python 3.13+ (for example `klaviyo-mcp-server`), do not override `PYTHON_BIN` to an older interpreter in container deployments.
 
 ## API Reference
+
+### Comms Management service-HMAC profile
+
+The V1 service-HMAC transport is limited to one platform-owned Streamable HTTP profile. Register it through the existing server-management API with these non-secret fields (the `name` remains the caller's stable platform server identifier):
+
+```json
+{
+  "name": "comms-management",
+  "source": "platform",
+  "transportType": "streamable_http",
+  "authMode": "service_hmac",
+  "serviceHmacProfile": "comms_management",
+  "url": "https://comms-management:8080/internal/mcp"
+}
+```
+
+The combination is closed. It cannot be selected by an external or user-installed server, stdio transport, another URL/profile, configured query or fragment, static headers, shared session ID, OAuth configuration, or external secret fields. Server responses may include the non-secret `serviceHmacProfile`; they never include the key-file path, key bytes, per-request authentication headers, timestamp, nonce, or signature.
+
+If the environment variable is absent, the keyring is invalid/out of its active window, or a reload fails validation, only this profile is unavailable. Its connection attempt returns a typed service-unavailable error and it does not claim a connected state; `/healthz` and all unrelated stdio, unauthenticated HTTP, and OAuth servers remain operational.
+
+Send `SIGHUP` after atomically replacing the mounted keyring file. A completely valid candidate becomes active for the next outbound request. An invalid candidate leaves the prior ring in memory only for later recovery but disables signing until a subsequent valid reload.
 
 ### Package Management
 

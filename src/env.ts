@@ -35,5 +35,6 @@ export const env = {
   PYTHON_BIN: process.env.PYTHON_BIN,
   PYTHON_VENV_DIR: process.env.PYTHON_VENV_DIR || 'packages/python',
   PIP_INDEX_URL: process.env.PIP_INDEX_URL,
-  PIP_EXTRA_INDEX_URL: process.env.PIP_EXTRA_INDEX_URL
+  PIP_EXTRA_INDEX_URL: process.env.PIP_EXTRA_INDEX_URL,
+  MSQ_COMMS_MCP_HMAC_KEY_FILE: process.env.MSQ_COMMS_MCP_HMAC_KEY_FILE
 }

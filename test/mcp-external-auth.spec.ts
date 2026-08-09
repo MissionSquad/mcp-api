@@ -2,6 +2,7 @@ import { requireUsername } from '../src/controllers/mcp'
 import {
   MCPService,
   resolveUserConnectionTeardownPolicy,
+  assertServiceHmacServerConfiguration,
   assertTransportConfigCompatible,
   buildAuthorizationServerMetadataCandidates,
   buildMergedAuthorizationServerResult,
@@ -30,6 +31,7 @@ import {
   resolvePreferredTokenEndpointAuthMethod
 } from '../src/services/dcrClients'
 import { validateExternalMcpUrl } from '../src/utils/ssrf'
+import { COMMS_MANAGEMENT_MCP_URL } from '../src/services/serviceHmac'
 
 const originalFetch = global.fetch
 
@@ -51,6 +53,84 @@ describe('external MCP request validation', () => {
         sessionId: 'shared-session'
       })
     ).toThrow('Streamable HTTP server definitions cannot define sessionId')
+  })
+
+  test('accepts only the closed platform comms_management service-HMAC server state', () => {
+    expect(() =>
+      assertServiceHmacServerConfiguration({
+        source: 'platform',
+        transportType: 'streamable_http',
+        authMode: 'service_hmac',
+        serviceHmacProfile: 'comms_management',
+        url: COMMS_MANAGEMENT_MCP_URL
+      })
+    ).not.toThrow()
+  })
+
+  test.each([
+    ['external source', { source: 'external' }],
+    ['stdio transport', { transportType: 'stdio' }],
+    ['missing profile', { serviceHmacProfile: undefined }],
+    ['alternate profile', { serviceHmacProfile: 'other' }],
+    ['alternate origin', { url: 'https://other:8080/internal/mcp' }],
+    ['alternate port', { url: 'https://comms-management:8443/internal/mcp' }],
+    ['alternate path', { url: 'https://comms-management:8080/mcp' }],
+    ['configured query', { url: `${COMMS_MANAGEMENT_MCP_URL}?session=static` }],
+    ['configured fragment', { url: `${COMMS_MANAGEMENT_MCP_URL}#fragment` }],
+    ['static headers', { headers: { Authorization: 'Bearer forbidden' } }],
+    ['shared session', { sessionId: 'shared' }],
+    ['OAuth template', { oauthTemplate: {} }],
+    ['OAuth client', { oauthClientConfig: { clientId: 'client' } }],
+    ['OAuth provisioning', { oauthProvisioningContext: {} }],
+    ['external secret fields', { secretFields: [] }],
+    ['external secret name', { secretName: 'TOKEN' }],
+    ['external secret names', { secretNames: [] }],
+    ['user selection', { username: 'alice' }]
+  ])('rejects service-HMAC with %s', (_name, override) => {
+    expect(() =>
+      assertServiceHmacServerConfiguration({
+        source: 'platform',
+        transportType: 'streamable_http',
+        authMode: 'service_hmac',
+        serviceHmacProfile: 'comms_management',
+        url: COMMS_MANAGEMENT_MCP_URL,
+        ...override
+      })
+    ).toThrow(McpValidationError)
+  })
+
+  test.each(['none', 'oauth2'])('rejects serviceHmacProfile with %s auth', (authMode) => {
+    expect(() =>
+      assertServiceHmacServerConfiguration({
+        source: 'platform',
+        transportType: 'streamable_http',
+        authMode,
+        serviceHmacProfile: 'comms_management',
+        url: COMMS_MANAGEMENT_MCP_URL
+      })
+    ).toThrow('serviceHmacProfile requires authMode service_hmac')
+  })
+
+  test('preserves existing none and OAuth server defaults when the service selector is absent', () => {
+    expect(() => assertServiceHmacServerConfiguration({})).not.toThrow()
+    expect(() =>
+      assertServiceHmacServerConfiguration({
+        source: 'external',
+        transportType: 'streamable_http',
+        authMode: 'none',
+        url: 'https://example.com/mcp',
+        headers: { 'X-Existing': 'preserved' }
+      })
+    ).not.toThrow()
+    expect(() =>
+      assertServiceHmacServerConfiguration({
+        source: 'external',
+        transportType: 'streamable_http',
+        authMode: 'oauth2',
+        url: 'https://example.com/mcp',
+        oauthTemplate: {}
+      })
+    ).not.toThrow()
   })
 
   test('parses RFC 9728 challenge metadata and scope hints', () => {
@@ -800,6 +880,10 @@ describe('external MCP error contract', () => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
 
       if (url === 'https://example.com/.well-known/oauth-protected-resource') {
+        return new Response('Not Found', { status: 404 })
+      }
+
+      if (url === 'https://example.com/.well-known/oauth-authorization-server/mcp') {
         return new Response('Not Found', { status: 404 })
       }
 

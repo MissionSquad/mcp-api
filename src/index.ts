@@ -14,6 +14,7 @@ import { McpUserSessions } from './services/userSessions'
 import { McpUserServerInstalls } from './services/userServerInstalls'
 import { McpDcrClients } from './services/dcrClients'
 import { ResourceStatsService } from './services/resourceStats'
+import { ServiceHmacProvider } from './services/serviceHmac'
 
 export type Resource = {
   init: () => Promise<void>
@@ -45,6 +46,14 @@ export class API {
     // Register built-in servers before initializing services
     registerBuiltInServers()
 
+    // This profile is optional at process scope. Missing or invalid key material
+    // blocks only service-HMAC MCP connections and leaves process liveness intact.
+    const serviceHmacProvider = new ServiceHmacProvider({
+      keyFilePath: env.MSQ_COMMS_MCP_HMAC_KEY_FILE
+    })
+    await serviceHmacProvider.init()
+    this.resources.push(serviceHmacProvider)
+
     // Initialize Secrets service
     const secretsService = new Secrets({ mongoParams })
     await secretsService.init()
@@ -71,7 +80,8 @@ export class API {
       oauthTokensService,
       userSessionsService,
       userServerInstalls,
-      dcrClients
+      dcrClients,
+      serviceHmacProvider
     })
     await mcpController.init()
     mcpController.registerRoutes()
