@@ -803,6 +803,10 @@ describe('external MCP error contract', () => {
         return new Response('Not Found', { status: 404 })
       }
 
+      if (url === 'https://example.com/.well-known/oauth-authorization-server/mcp') {
+        return new Response('Not Found', { status: 404 })
+      }
+
       if (url === 'https://example.com/.well-known/oauth-authorization-server') {
         return new Response(
           JSON.stringify({
