@@ -81,6 +81,8 @@ WORKDIR /app
 
 # Bundle app source
 COPY . .
+RUN test ! -e /app/.git && test ! -e /app/.npmrc && \
+    test -z "$(find /app -maxdepth 1 -type f \( -name '.env*' -o -name 'gha-creds-*.json' \) ! -name '.env.example' -print -quit)"
 
 # RUN unzip abis.zip
 
