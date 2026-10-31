@@ -14,6 +14,7 @@ import { McpUserSessions } from './services/userSessions'
 import { McpUserServerInstalls } from './services/userServerInstalls'
 import { McpDcrClients } from './services/dcrClients'
 import { ResourceStatsService } from './services/resourceStats'
+import { ExecutionBridge } from './controllers/execution'
 import { ServiceHmacProvider } from './services/serviceHmac'
 
 export type Resource = {
@@ -53,6 +54,12 @@ export class API {
     })
     await serviceHmacProvider.init()
     this.resources.push(serviceHmacProvider)
+
+    if (process.env.MSQ_EXECUTION_RESOURCE) {
+      const bridge = new ExecutionBridge(app, mongoParams, process.env.MSQ_EXECUTION_RESOURCE, process.env.MSQ_EXECUTION_BRIDGE_KEY ?? '')
+      await bridge.init()
+      this.resources.push(bridge)
+    }
 
     // Initialize Secrets service
     const secretsService = new Secrets({ mongoParams })

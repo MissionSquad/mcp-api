@@ -1,0 +1,82 @@
+name: Publish execution GHCR candidate
+on:
+  push:
+    branches: [codex/execution-invocation]
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: execution-ghcr-candidate-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'MissionSquad/mcp-api' && github.ref == 'refs/heads/codex/execution-invocation' && github.event_name != 'pull_request'
+    runs-on: [self-hosted, Linux, X64, proxmox, docker, builder]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+      - name: Build and test only the exact tracked source
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          root="${RUNNER_TEMP}/mcp-api-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -m 0700 "$root"
+          mkdir "$root/context"
+          git archive "$GITHUB_SHA" | tar -x -C "$root/context"
+          tag="ghcr.io/missionsquad/mcp-api:candidate-sha-${GITHUB_SHA}-${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          docker build --platform linux/amd64 --iidfile "$root/image.id" \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label ai.missionsquad.publication=candidate-only --tag "$tag" "$root/context"
+          image="$(cat "$root/image.id")"
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges:true \
+            --entrypoint node "$image" --check /app/dist/index.js
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges:true \
+            --entrypoint node "$image" /app/node_modules/jest/bin/jest.js \
+            test/executionBridge.spec.ts --config jest.config.json --runInBand --coverage=false
+      - name: Push the tested identity to a candidate tag only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          root="${RUNNER_TEMP}/mcp-api-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          export DOCKER_CONFIG="$(mktemp -d "$root/auth-XXXXXXXX")"
+          trap 'rm -f -- "$DOCKER_CONFIG/config.json"; rmdir -- "$DOCKER_CONFIG" || true' EXIT
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          unset GH_TOKEN
+          image="$(cat "$root/image.id")"
+          tag="ghcr.io/missionsquad/mcp-api:candidate-sha-${GITHUB_SHA}-${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          test "$(docker image inspect "$tag" --format '{{.Id}}')" = "$image"
+          docker push "$tag"
+          docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}' > "$root/registry.json"
+          ROOT="$root" TAG="$tag" node --input-type=module -e '
+            import fs from "node:fs";
+            const descriptor=JSON.parse(fs.readFileSync(process.env.ROOT+"/registry.json"));
+            if(!/^sha256:[a-f0-9]{64}$/.test(descriptor.digest))throw Error("Registry digest unavailable");
+            const digest="ghcr.io/missionsquad/mcp-api@"+descriptor.digest;
+            const record={sourceSha:process.env.GITHUB_SHA,sourceRef:process.env.GITHUB_REF,tag:process.env.TAG,digest,platform:"linux/amd64",candidateOnly:true,deployed:false,npmPublished:false};
+            fs.writeFileSync(process.env.ROOT+"/candidate-image.json",JSON.stringify(record,null,2)+"\n");
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,"Candidate only: `"+digest+"` from `"+process.env.GITHUB_SHA+"`. No deployment, release tag, or npm publication.\n");'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: mcp-api-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mcp-api-candidate-${{ github.run_id }}-${{ github.run_attempt }}/candidate-image.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Remove only this run's candidate context and tag
+        if: always()
+        shell: bash
+        run: |
+          docker image rm "ghcr.io/missionsquad/mcp-api:candidate-sha-${GITHUB_SHA}-${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}" >/dev/null 2>&1 || true
+          rm -rf -- "${RUNNER_TEMP}/mcp-api-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
