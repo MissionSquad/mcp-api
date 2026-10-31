@@ -19,6 +19,9 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
       - name: Build and test only the exact tracked source
         shell: bash
         run: |
