@@ -199,7 +199,6 @@ jobs:
             ## Pull Request Messages
             ${{ steps.pr-messages.outputs.PR_MESSAGES }}
 
-            ## Security Scan
-            A security scan was performed on this Docker image. Any critical or high vulnerabilities would have prevented this release.
+            Execution integration is enabled only when the deployment configures its execution resource.
           draft: false
           prerelease: false
