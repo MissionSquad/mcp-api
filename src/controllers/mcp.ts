@@ -261,6 +261,11 @@ export class MCPController implements Resource {
   }
 
   private async callTool(req: Request, res: Response, next: NextFunction): Promise<void> {
+    if (process.env.MSQ_EXECUTION_RESOURCE && typeof req.body?.serverName === 'string' && req.body.serverName.trim() === 'mcp-execution') {
+      res.status(403).json({success:false,error:'Execution calls require a signed invocation'})
+      return
+    }
+
     try {
       const body = req.body as ToolCallRequest
       let { serverName, methodName, args } = body
@@ -294,7 +299,7 @@ export class MCPController implements Resource {
 
       log({
         level: 'info',
-        msg: `calling tool ${methodName} on server ${serverName} with args ${JSON.stringify(args)}`
+        msg: `calling tool ${methodName} on server ${serverName}`
       })
       const result = await this.mcpService.callTool(username, serverName, methodName, args)
       res.json({ success: true, data: result })
