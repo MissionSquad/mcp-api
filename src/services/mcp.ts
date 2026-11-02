@@ -1,3 +1,4 @@
+import { withExecutionCatalog } from './executionCatalog'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import {
@@ -419,7 +420,7 @@ export const assertServiceHmacServerConfiguration = (
     throw new McpValidationError('Invalid MCP server authMode.')
   }
 
-  const selectsServiceHmac = authMode === 'service_hmac' || config.serviceHmacProfile !== undefined
+  const selectsServiceHmac = authMode === 'service_hmac' || config.serviceHmacProfile != null
   if (!selectsServiceHmac) {
     return
   }
@@ -451,7 +452,7 @@ export const assertServiceHmacServerConfiguration = (
     ['username', config.username]
   ]
   const configuredForbiddenFields = forbiddenFields
-    .filter(([, value]) => value !== undefined)
+    .filter(([, value]) => value != null)
     .map(([field]) => field)
   if (configuredForbiddenFields.length > 0) {
     throw new McpValidationError(
@@ -1737,6 +1738,8 @@ export class MCPService implements Resource {
   }
 
   private async normalizeServerRecord(server: MCPServerRecord): Promise<MCPServer> {
+    // Older BSON writes serialized optional undefined properties as null.
+    server = { ...server, serviceHmacProfile: server.serviceHmacProfile ?? undefined }
     assertServiceHmacServerConfiguration(server)
     const withSecrets = await this.migrateServerSecrets(server)
     if (this.shouldBackfillExternalOAuthResourceUri(withSecrets)) {
@@ -1747,7 +1750,7 @@ export class MCPService implements Resource {
       ...withSecrets,
       oauthTemplate: this.normalizeExternalOAuthTemplateForRuntime(withSecrets)
     }
-    return this.migrateServerTransport(withRuntimeOauthTemplate)
+    return withExecutionCatalog(await this.migrateServerTransport(withRuntimeOauthTemplate))
   }
 
   private async buildTransportOptions(server: MCPServer, username?: string): Promise<TransportFactoryOptions> {
@@ -3511,6 +3514,7 @@ export class MCPService implements Resource {
       }
     }
 
+    server = withExecutionCatalog(server)
     assertServiceHmacServerConfiguration(server)
     await this.mcpDBClient.insert(server)
 
@@ -3751,7 +3755,7 @@ export class MCPService implements Resource {
 
     if (updatedServer.transportType === 'streamable_http') {
       // Streamable HTTP: register definition, connections are lazy per-user
-      this.servers[serverKey] = { ...updatedServer, status: 'disconnected', logs: [] }
+      this.servers[serverKey] = { ...withExecutionCatalog(updatedServer), status: 'disconnected', logs: [] }
       if (!this.serverKeys.includes(serverKey)) {
         this.serverKeys.push(serverKey)
       }
@@ -3935,7 +3939,7 @@ export class MCPService implements Resource {
     if (updatedServer.transportType === 'streamable_http') {
       // Streamable HTTP: just mark as enabled, connections are lazy per-user
       if (!this.servers[serverKey]) {
-        this.servers[serverKey] = { ...updatedServer, status: 'disconnected', logs: [] }
+        this.servers[serverKey] = { ...withExecutionCatalog(updatedServer), status: 'disconnected', logs: [] }
         if (!this.serverKeys.includes(serverKey)) {
           this.serverKeys.push(serverKey)
         }

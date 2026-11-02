@@ -1294,6 +1294,14 @@ Provides two tools:
 
 Requires the `SEARXNG_URL` environment variable to be set. If not configured, the `web_search` tool is unavailable.
 
+### Execution environments
+
+Register the execution service through `POST /mcp/servers` as a platform server named `mcp-execution`, with `transportType: "streamable_http"`, its MCP URL, and `enabled: true`. The URL must equal the host's `MSQ_EXECUTION_RESOURCE`. No shared bearer header is required.
+
+All signed-in users see the 18 version-1 tool schemas in the existing server and tool catalogs. This metadata is pinned to execution release 0.1.2; it contains no user data and does not establish an authenticated connection. HTTP status remains lazy/disconnected until a connection exists. Actual discovery and execution use the Mission Squad API's signed, per-user invocation bridge. Generic `/mcp/tool/call` execution requests remain blocked; an installed server never grants access to another user's workspaces. Anonymous callers have no execution authority.
+
+The catalog comprises profiles; open/close/checkpoint; status/list; exec/run_code/job/cancel; files/settings/transfer; operation; and backup/export/import/fork, each with the `ee_` prefix. Keep `src/services/execution-catalog.json` synchronized with the installed execution contract when changing its version.
+
 ### Auto-Install on First Run
 
 The `INSTALL_ON_START` environment variable configures packages to install automatically on the first application start. The format is a comma-separated list of `repo|serverName` pairs:
