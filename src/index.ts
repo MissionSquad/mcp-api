@@ -56,7 +56,7 @@ export class API {
     this.resources.push(serviceHmacProvider)
 
     if (process.env.MSQ_EXECUTION_RESOURCE) {
-      const bridge = new ExecutionBridge(app, mongoParams, process.env.MSQ_EXECUTION_RESOURCE, process.env.MSQ_EXECUTION_BRIDGE_KEY ?? '')
+      const bridge = new ExecutionBridge(app, mongoParams, process.env.MSQ_EXECUTION_RESOURCE, process.env.MSQ_EXECUTION_BRIDGE_KEY ?? '', { testMode: process.env.MSQ_EXECUTION_TEST_MODE === 'true' })
       await bridge.init()
       this.resources.push(bridge)
     }

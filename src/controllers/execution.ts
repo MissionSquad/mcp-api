@@ -1,4 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
+import { isIP } from 'node:net'
 import { Express, Request, Response } from 'express'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -76,10 +77,19 @@ export class ExecutionBridge {
     private readonly app: Express,
     mongo: MongoConnectionParams,
     readonly resource: string,
-    secret: string
+    secret: string,
+    options: { testMode?: boolean } = {}
   ) {
     this.key = Buffer.from(secret, 'base64')
     this.target = new URL(resource)
+    // Permit private cleartext transport only for explicit test deployments.
+    // Check the original literal as URL normalizes numeric aliases and octal IPs.
+    const literal = resource.match(/^http:\/\/(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?(?:\/|$)/)?.[1]
+    const octets = literal?.split('.').map(Number)
+    const privateTestHttp = options.testMode === true && literal === this.target.hostname &&
+      isIP(literal ?? '') === 4 && octets !== undefined &&
+      (octets[0] === 10 || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+        (octets[0] === 192 && octets[1] === 168))
     if (
       this.key.length !== 32 ||
       this.key.toString('base64') !== secret ||
@@ -88,7 +98,7 @@ export class ExecutionBridge {
       this.target.search ||
       this.target.hash ||
       (this.target.protocol !== 'https:' &&
-        !(this.target.protocol === 'http:' && ['127.0.0.1', '[::1]', 'localhost'].includes(this.target.hostname)))
+        !(this.target.protocol === 'http:' && (['127.0.0.1', '[::1]', 'localhost'].includes(this.target.hostname) || privateTestHttp)))
     )
       throw Error('Invalid execution bridge configuration')
     this.nonces = new MongoDBClient<{ _id: string; expiresAt: Date }>(mongo, [
