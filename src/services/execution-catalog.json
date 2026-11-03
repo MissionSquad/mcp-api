@@ -1,7 +1,8 @@
 {
   "contractVersion": "1",
   "sourceRepository": "MissionSquad/mcp-execution",
-  "sourceRevision": "1d224ce7f0b36ff3f8c64f3ec8a39b7369933c22",
+  "sourceRevision": "54ca9a8e5327b93cf70a1a97e1f31c8e22531e8c",
+  "sourceVersion": "0.1.3",
   "tools": [
     {
       "name": "ee_profiles",
@@ -23,7 +24,7 @@
     },
     {
       "name": "ee_open",
-      "description": "Open a fresh session or restore the current saved head under an exclusive writer lease.",
+      "description": "Open a fresh session or restore saved work under an exclusive writer lease, and await READY.",
       "inputSchema": {
         "type": "object",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -31,6 +32,10 @@
           "version": {
             "type": "string",
             "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
           },
           "idempotencyKey": {
             "type": "string",
@@ -160,7 +165,7 @@
     },
     {
       "name": "ee_operation",
-      "description": "Read the authorized durable status of a runtime lifecycle operation.",
+      "description": "Await the authorized durable result of an operation. Set wait:false only for an immediate status snapshot.",
       "inputSchema": {
         "type": "object",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -168,6 +173,10 @@
           "version": {
             "type": "string",
             "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
           },
           "operationId": {
             "type": "string",
@@ -228,7 +237,7 @@
     },
     {
       "name": "ee_exec",
-      "description": "Queue a command in the current authorized workspace and return its durable job ID.",
+      "description": "Run a command and await its retained output. Set background:true or wait:false to return its durable job ID immediately.",
       "inputSchema": {
         "type": "object",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -236,6 +245,10 @@
           "version": {
             "type": "string",
             "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
           },
           "idempotencyKey": {
             "type": "string",
@@ -303,7 +316,7 @@
     },
     {
       "name": "ee_run_code",
-      "description": "Queue a script in the approved coding runtime and return its durable job ID.",
+      "description": "Run a script and await its retained output. Set background:true or wait:false to return its durable job ID immediately.",
       "inputSchema": {
         "type": "object",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -311,6 +324,10 @@
           "version": {
             "type": "string",
             "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
           },
           "idempotencyKey": {
             "type": "string",
@@ -363,7 +380,7 @@
     },
     {
       "name": "ee_job",
-      "description": "Read the job state and a bounded page of retained output.",
+      "description": "Await job completion and return its state and bounded output. Set wait:false only for an immediate snapshot.",
       "inputSchema": {
         "type": "object",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -371,6 +388,10 @@
           "version": {
             "type": "string",
             "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
           },
           "jobId": {
             "type": "string",
@@ -398,7 +419,7 @@
     },
     {
       "name": "ee_cancel",
-      "description": "Request termination of a queued or running job and its descendants.",
+      "description": "Cancel a queued or running job and its descendants, and await its terminal state.",
       "inputSchema": {
         "type": "object",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -406,6 +427,10 @@
           "version": {
             "type": "string",
             "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
           },
           "idempotencyKey": {
             "type": "string",
@@ -430,7 +455,7 @@
     },
     {
       "name": "ee_files",
-      "description": "Access a bounded path under the durable workspace through the owning worker. Poll the returned operation ID for its result.",
+      "description": "Access a bounded path under the durable workspace through the owning worker. Await its durable result; wait:false returns the operation ID immediately.",
       "inputSchema": {
         "type": "object",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -441,6 +466,10 @@
               "version": {
                 "type": "string",
                 "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
               },
               "sessionId": {
                 "type": "string",
@@ -483,6 +512,10 @@
                 "type": "string",
                 "const": "1"
               },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
+              },
               "sessionId": {
                 "type": "string",
                 "minLength": 1,
@@ -513,6 +546,10 @@
               "version": {
                 "type": "string",
                 "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
               },
               "sessionId": {
                 "type": "string",
@@ -556,6 +593,10 @@
               "version": {
                 "type": "string",
                 "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
               },
               "idempotencyKey": {
                 "type": "string",
@@ -618,6 +659,10 @@
                 "type": "string",
                 "const": "1"
               },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
+              },
               "idempotencyKey": {
                 "type": "string",
                 "minLength": 1,
@@ -655,6 +700,10 @@
               "version": {
                 "type": "string",
                 "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
               },
               "idempotencyKey": {
                 "type": "string",
@@ -706,6 +755,10 @@
                 "type": "string",
                 "const": "1"
               },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
+              },
               "idempotencyKey": {
                 "type": "string",
                 "minLength": 1,
@@ -752,7 +805,7 @@
     },
     {
       "name": "ee_transfer",
-      "description": "Create an owner-authenticated staged file transfer, import a ready object into the workspace, or export a live file. Live files are limited to 50MiB; poll returned operations.",
+      "description": "Create an owner-authenticated staged file transfer, import a ready object into the workspace, or export a live file. Live files are limited to 50MiB. File imports/exports await completion; wait:false returns an operation ID.",
       "inputSchema": {
         "type": "object",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -763,6 +816,10 @@
               "version": {
                 "type": "string",
                 "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
               },
               "idempotencyKey": {
                 "type": "string",
@@ -794,6 +851,10 @@
               "version": {
                 "type": "string",
                 "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
               },
               "idempotencyKey": {
                 "type": "string",
@@ -840,6 +901,10 @@
                 "type": "string",
                 "const": "1"
               },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
+              },
               "idempotencyKey": {
                 "type": "string",
                 "minLength": 1,
@@ -876,7 +941,7 @@
     },
     {
       "name": "ee_settings",
-      "description": "Queue durable working-directory and non-secret environment settings. The supplied env map replaces the existing explicit environment; omit it to preserve values. Poll the returned operation ID.",
+      "description": "Queue durable working-directory and non-secret environment settings. The supplied env map replaces the existing explicit environment; omit it to preserve values. Await its durable result; wait:false returns immediately.",
       "inputSchema": {
         "type": "object",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -884,6 +949,10 @@
           "version": {
             "type": "string",
             "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
           },
           "idempotencyKey": {
             "type": "string",
@@ -933,6 +1002,10 @@
             "type": "string",
             "const": "1"
           },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
+          },
           "idempotencyKey": {
             "type": "string",
             "minLength": 1,
@@ -964,7 +1037,7 @@
     },
     {
       "name": "ee_close",
-      "description": "Close this session, saving a revision or explicitly discarding its current changes.",
+      "description": "Save and close this session, waiting for confirmed cleanup, or explicitly discard its current changes.",
       "inputSchema": {
         "type": "object",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -972,6 +1045,10 @@
           "version": {
             "type": "string",
             "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
           },
           "idempotencyKey": {
             "type": "string",
@@ -1012,6 +1089,10 @@
           "version": {
             "type": "string",
             "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
           },
           "idempotencyKey": {
             "type": "string",
@@ -1065,6 +1146,10 @@
           "version": {
             "type": "string",
             "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
           },
           "idempotencyKey": {
             "type": "string",
@@ -1173,7 +1258,7 @@
     },
     {
       "name": "ee_import",
-      "description": "Verify a completed portable-workspace upload, create a separate owner-bound saved workspace, and return an operation ID. Poll ee_operation before opening its new workspace.",
+      "description": "Verify a completed portable-workspace upload, create a separate owner-bound saved workspace, and return an operation ID. Use ee_operation to await completion before opening its new workspace.",
       "inputSchema": {
         "type": "object",
         "$schema": "https://json-schema.org/draft/2020-12/schema",

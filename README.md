@@ -1298,7 +1298,7 @@ Requires the `SEARXNG_URL` environment variable to be set. If not configured, th
 
 Register the execution service through `POST /mcp/servers` as a platform server named `mcp-execution`, with `transportType: "streamable_http"`, its MCP URL, and `enabled: true`. The URL must equal the host's `MSQ_EXECUTION_RESOURCE`. No shared bearer header is required.
 
-All signed-in users see the 18 version-1 tool schemas in the existing server and tool catalogs. This metadata is pinned to execution release 0.1.2; it contains no user data and does not establish an authenticated connection. HTTP status remains lazy/disconnected until a connection exists. Actual discovery and execution use the Mission Squad API's signed, per-user invocation bridge. Generic `/mcp/tool/call` execution requests remain blocked; an installed server never grants access to another user's workspaces. Anonymous callers have no execution authority.
+All signed-in users see the 18 version-1 tool schemas in the existing server and tool catalogs. This metadata is pinned to execution release 0.1.3; it contains no user data and does not establish an authenticated connection. HTTP status remains lazy/disconnected until a connection exists. Actual discovery and execution use the Mission Squad API's signed, per-user invocation bridge. Generic `/mcp/tool/call` execution requests remain blocked; an installed server never grants access to another user's workspaces. Anonymous callers have no execution authority.
 
 The catalog comprises profiles; open/close/checkpoint; status/list; exec/run_code/job/cancel; files/settings/transfer; operation; and backup/export/import/fork, each with the `ee_` prefix. Keep `src/services/execution-catalog.json` synchronized with the installed execution contract when changing its version.
 
@@ -1466,3 +1466,5 @@ We're particularly interested in:
 ## License
 
 Apache-2.0
+
+Execution bridge requests use `MSQ_EXECUTION_REQUEST_TIMEOUT_MS` (default 180000 milliseconds). Discovery stays bounded to 30 seconds. Keep the request budget above the execution service foreground wait budget (default 120 seconds), allowing transport overhead. The signature freshness window remains 30 seconds; this is independent of request duration.

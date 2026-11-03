@@ -4,6 +4,7 @@ import { Express, Request, Response } from 'express'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { MongoDBClient, MongoConnectionParams } from '../utils/mongodb'
+import { executionRequestTimeout } from '../utils/executionTimeout'
 
 export const RESERVED_EXECUTION_SERVER = 'mcp-execution'
 const digest = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -70,6 +71,7 @@ export function verifyInvocation(
   return timingSafeEqual(createHmac('sha256', key).update(signed).digest(), Buffer.from(sig, 'hex'))
 }
 export class ExecutionBridge {
+  private readonly requestTimeout: number
   private readonly nonces
   private readonly key
   private readonly target
@@ -80,6 +82,7 @@ export class ExecutionBridge {
     secret: string,
     options: { testMode?: boolean } = {}
   ) {
+    this.requestTimeout = executionRequestTimeout()
     this.key = Buffer.from(secret, 'base64')
     this.target = new URL(resource)
     // Permit private cleartext transport only for explicit test deployments.
@@ -134,7 +137,9 @@ export class ExecutionBridge {
       if (!res.writableEnded) controller.abort()
     }
     res.once('close', cancel)
-    const timer = setTimeout(() => controller.abort(), 30000)
+    const timeout = body.action === 'list' ? Math.min(30000, this.requestTimeout) : this.requestTimeout
+    const timer = setTimeout(() => controller.abort(), timeout)
+    const requestOptions = { timeout, maxTotalTimeout: timeout, signal: controller.signal }
     try {
       const transport = new StreamableHTTPClientTransport(this.target, {
         requestInit: { headers: { authorization: 'Bearer ' + bearer }, redirect: 'error' },
@@ -148,11 +153,11 @@ export class ExecutionBridge {
           })
         }
       })
-      await client.connect(transport)
+      await client.connect(transport, requestOptions)
       const value =
         body.action === 'list'
-          ? await client.listTools()
-          : await client.callTool({ name: body.name, arguments: body.args })
+          ? await client.listTools(undefined, requestOptions)
+          : await client.callTool({ name: body.name, arguments: body.args }, undefined, requestOptions)
       res.json({ success: true, data: value })
     } catch {
       if (!res.headersSent && !res.destroyed) res.status(502).json({ error: 'Execution service unavailable' })
