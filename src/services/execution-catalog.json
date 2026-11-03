@@ -1,0 +1,1346 @@
+{
+  "contractVersion": "1",
+  "sourceRepository": "MissionSquad/mcp-execution",
+  "sourceRevision": "439a2e9a3fd35ad3c9efd3754360b7a4952eb777",
+  "sourceVersion": "0.2.0",
+  "tools": [
+    {
+      "name": "ee_profiles",
+      "description": "Inspect the coding profile, default resource limits and execution admission status.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_open",
+      "description": "Open a fresh session or restore saved work under an exclusive writer lease, and await READY.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "workspaceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "snapshotId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "profile": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "networkPolicy": {
+            "type": "string",
+            "enum": [
+              "public-internet",
+              "offline"
+            ]
+          },
+          "resources": {
+            "type": "object",
+            "properties": {
+              "cpu": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "memoryMiB": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "diskMiB": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "maxFiles": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "maxProcesses": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "jobOutputMiB": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "additionalProperties": false
+          },
+          "timeouts": {
+            "type": "object",
+            "properties": {
+              "idleSeconds": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "maxSessionSeconds": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "commandSeconds": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "version",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_status",
+      "description": "Read lifecycle and saved-revision status for one authorized workspace or execution session.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "workspaceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_operation",
+      "description": "Await the authorized durable result of an operation. Set wait:false only for an immediate status snapshot.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
+          },
+          "operationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          }
+        },
+        "required": [
+          "version",
+          "operationId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_list",
+      "description": "List the workspaces visible with owner-wide read permission. Use the cursor to continue.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "kind": {
+            "default": "workspaces",
+            "type": "string",
+            "enum": [
+              "workspaces",
+              "revisions",
+              "backups"
+            ]
+          },
+          "workspaceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "cursor": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "limit": {
+            "default": 25,
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_exec",
+      "description": "Run a command and await its retained output. Set background:true or wait:false to return its durable job ID immediately.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "directory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "timeoutSeconds": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "background": {
+            "default": false,
+            "type": "boolean"
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 65536
+          },
+          "executable": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "argv": {
+            "maxItems": 1024,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 65536
+            }
+          },
+          "env": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^[A-Z_][A-Z0-9_]*$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 8192
+            }
+          }
+        },
+        "required": [
+          "version",
+          "idempotencyKey",
+          "sessionId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_run_code",
+      "description": "Run a script and await its retained output. Set background:true or wait:false to return its durable job ID immediately.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "directory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "timeoutSeconds": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "background": {
+            "default": false,
+            "type": "boolean"
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "python",
+              "node",
+              "typescript"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 1048576
+          }
+        },
+        "required": [
+          "version",
+          "idempotencyKey",
+          "sessionId",
+          "language",
+          "source"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_job",
+      "description": "Await job completion and return its state and bounded output. Set wait:false only for an immediate snapshot.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
+          },
+          "jobId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "cursor": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "maxBytes": {
+            "default": 65536,
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 65536
+          }
+        },
+        "required": [
+          "version",
+          "jobId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_cancel",
+      "description": "Cancel a queued or running job and its descendants, and await its terminal state.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "jobId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          }
+        },
+        "required": [
+          "version",
+          "idempotencyKey",
+          "jobId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_files",
+      "description": "Access a bounded path under the durable workspace through the owning worker. Await its durable result; wait:false returns the operation ID immediately.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "string",
+                "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "action": {
+                "type": "string",
+                "const": "list"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "cursor": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "limit": {
+                "default": 100,
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 1000
+              }
+            },
+            "required": [
+              "version",
+              "sessionId",
+              "action",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "string",
+                "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "action": {
+                "type": "string",
+                "const": "stat"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "required": [
+              "version",
+              "sessionId",
+              "action",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "string",
+                "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "action": {
+                "type": "string",
+                "const": "read"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "offset": {
+                "default": 0,
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "maxBytes": {
+                "default": 65536,
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 65536
+              }
+            },
+            "required": [
+              "version",
+              "sessionId",
+              "action",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "string",
+                "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "action": {
+                "type": "string",
+                "const": "write"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "content": {
+                "type": "string",
+                "maxLength": 1048576
+              },
+              "encoding": {
+                "default": "utf8",
+                "type": "string",
+                "enum": [
+                  "utf8",
+                  "base64"
+                ]
+              },
+              "ifMatch": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "ifAbsent": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "version",
+              "idempotencyKey",
+              "sessionId",
+              "action",
+              "path",
+              "content"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "string",
+                "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "action": {
+                "type": "string",
+                "const": "mkdir"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "required": [
+              "version",
+              "idempotencyKey",
+              "sessionId",
+              "action",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "string",
+                "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "action": {
+                "type": "string",
+                "const": "move"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "destination": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "ifMatch": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              }
+            },
+            "required": [
+              "version",
+              "idempotencyKey",
+              "sessionId",
+              "action",
+              "path",
+              "destination"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "string",
+                "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "action": {
+                "type": "string",
+                "const": "delete"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "ifMatch": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "recursive": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "version",
+              "idempotencyKey",
+              "sessionId",
+              "action",
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "ee_transfer",
+      "description": "Create an owner-authenticated staged file transfer, import a ready object into the workspace, or export a live file. Live files are limited to 50MiB. File imports/exports await completion; wait:false returns an operation ID.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "string",
+                "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "action": {
+                "type": "string",
+                "const": "create"
+              },
+              "maxBytes": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "version",
+              "idempotencyKey",
+              "action",
+              "maxBytes"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "string",
+                "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "objectId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "action": {
+                "type": "string",
+                "const": "import"
+              },
+              "destination": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "required": [
+              "version",
+              "idempotencyKey",
+              "sessionId",
+              "objectId",
+              "action",
+              "destination"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "string",
+                "const": "1"
+              },
+              "wait": {
+                "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+                "type": "boolean"
+              },
+              "idempotencyKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "sessionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "action": {
+                "type": "string",
+                "const": "export"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              }
+            },
+            "required": [
+              "version",
+              "idempotencyKey",
+              "sessionId",
+              "action",
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "ee_settings",
+      "description": "Queue durable working-directory and non-secret environment settings. The supplied env map replaces the existing explicit environment; omit it to preserve values. Await its durable result; wait:false returns immediately.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "directory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "env": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "pattern": "^[A-Z_][A-Z0-9_]*$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 8192
+            }
+          }
+        },
+        "required": [
+          "version",
+          "idempotencyKey",
+          "sessionId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_checkpoint",
+      "description": "Publish a stable revision of this session and keep it open when permitted.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "busy": {
+            "default": "reject",
+            "type": "string",
+            "enum": [
+              "reject",
+              "interrupt"
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "idempotencyKey",
+          "sessionId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_close",
+      "description": "Save and close this session, waiting for confirmed cleanup, or explicitly discard its current changes.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "mode": {
+            "default": "save",
+            "type": "string",
+            "enum": [
+              "save",
+              "discard"
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "idempotencyKey",
+          "sessionId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_fork",
+      "description": "Create a new, closed workspace from an authorized saved revision or backup.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "workspaceId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "snapshotId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "backupId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              }
+            },
+            "required": [
+              "workspaceId"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "version",
+          "idempotencyKey",
+          "source"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_backup",
+      "description": "Pin the latest committed workspace revision as a named backup. Returns the pinned revision and time.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "workspaceId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "checkpointFirst": {
+            "default": false,
+            "type": "boolean"
+          },
+          "busy": {
+            "default": "reject",
+            "type": "string",
+            "enum": [
+              "reject",
+              "interrupt"
+            ]
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "version",
+          "idempotencyKey",
+          "workspaceId",
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_export",
+      "description": "Create a time-limited owner-authenticated download of a committed workspace and its profile manifest.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "workspaceId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "snapshotId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "backupId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              }
+            },
+            "required": [
+              "workspaceId"
+            ],
+            "additionalProperties": false
+          },
+          "selfContained": {
+            "default": false,
+            "type": "boolean"
+          },
+          "includeLogs": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "version",
+          "idempotencyKey",
+          "source"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_import",
+      "description": "Verify a completed portable-workspace upload, create a separate owner-bound saved workspace, and return an operation ID. Use ee_operation to await completion before opening its new workspace.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "objectId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          }
+        },
+        "required": [
+          "version",
+          "idempotencyKey",
+          "objectId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_export_zip",
+      "description": "Export selected files and directories recursively from an active session as a downloadable ZIP artifact. Paths remain relative to the workspace. Limited to 50MiB; awaits completion.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "paths": {
+            "minItems": 1,
+            "maxItems": 256,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          },
+          "filename": {
+            "default": "workspace.zip",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._ -]*\\.zip$"
+          }
+        },
+        "required": [
+          "version",
+          "idempotencyKey",
+          "sessionId",
+          "paths"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

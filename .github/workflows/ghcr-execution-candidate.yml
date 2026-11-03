@@ -1,7 +1,5 @@
 name: Publish execution GHCR candidate
 on:
-  push:
-    branches: [codex/execution-invocation]
   workflow_dispatch:
 permissions:
   contents: read
@@ -41,7 +39,7 @@ jobs:
             --entrypoint node "$image" --check /app/dist/index.js
           docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges:true \
             --entrypoint node "$image" /app/node_modules/jest/bin/jest.js \
-            test/executionBridge.spec.ts --config jest.config.json --runInBand --coverage=false
+            test/executionBridge.spec.ts test/executionBridgeTimeout.spec.ts test/executionTimeout.spec.ts test/executionCatalog.spec.ts test/mcp-service-hmac.spec.ts --config jest.config.json --runInBand --coverage=false
       - name: Push the tested identity to a candidate tag only
         shell: bash
         env:

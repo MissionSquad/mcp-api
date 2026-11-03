@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { McpServiceHmacUnavailableError, toMcpErrorResponse } from '../src/services/mcpErrors'
+import { BSON } from 'mongodb'
 import { MCPService } from '../src/services/mcp'
 import {
   COMMS_MANAGEMENT_MCP_URL,
@@ -614,6 +615,89 @@ describe('service-HMAC MCP service isolation', () => {
       url: 'https://comms-management:8080/alternate'
     })).rejects.toThrow(`service_hmac requires url ${COMMS_MANAGEMENT_MCP_URL}`)
     expect(update).not.toHaveBeenCalled()
+  })
+
+  test('legacy BSON null optionals do not select HMAC for ordinary server reads', async () => {
+    const service = createMcpService()
+    const normalize = Reflect.get(service, 'normalizeServerRecord').bind(service)
+    const row = BSON.deserialize(BSON.serialize({
+      name: 'ordinary-http', source: 'platform', transportType: 'streamable_http',
+      authMode: 'none', serviceHmacProfile: undefined, url: 'https://example.com/mcp',
+      status: 'disconnected', enabled: true
+    }, { ignoreUndefined: false }))
+    expect(row.serviceHmacProfile).toBeNull()
+    const normalized = await normalize(row)
+    expect(normalized.serviceHmacProfile).toBeUndefined()
+    expect(normalized.authMode).toBe('none')
+    await expect(normalize({ ...row, serviceHmacProfile: 'invalid-profile' })).rejects.toThrow(
+      'serviceHmacProfile requires authMode service_hmac'
+    )
+  })
+
+  test('legacy null forbidden optionals permit only a fully valid HMAC profile', async () => {
+    const service = createMcpService()
+    const normalize = Reflect.get(service, 'normalizeServerRecord').bind(service)
+    const row = { ...serviceHmacServer, headers: null, sessionId: null, oauthTemplate: null,
+      oauthClientConfig: null, oauthProvisioningContext: null, secretFields: null,
+      secretName: null, secretNames: null, username: null }
+    await expect(normalize(row)).resolves.toMatchObject({ authMode: 'service_hmac' })
+    await expect(normalize({ ...row, headers: {} })).rejects.toThrow('service_hmac cannot define headers')
+    await expect(normalize({ ...row, serviceHmacProfile: null })).rejects.toThrow(
+      'service_hmac requires serviceHmacProfile comms_management'
+    )
+  })
+
+  test('registered execution catalog survives BSON null roundtrip for every platform user', async () => {
+    const previous = process.env.MSQ_EXECUTION_RESOURCE
+    process.env.MSQ_EXECUTION_RESOURCE = 'http://10.1.252.22:8080/mcp'
+    try {
+      const listSecrets = jest.fn().mockResolvedValue([])
+      const getSecrets = jest.fn().mockResolvedValue({})
+      const listInstalls = jest.fn().mockResolvedValue([])
+      const getInstall = jest.fn()
+      const service = new MCPService({
+        mongoParams: { host: 'localhost:27017', db: 'test', user: 'user', pass: 'pass' },
+        secretsService: { listSecretNamesByServerPrefix: listSecrets, getUserServerSecrets: getSecrets } as never,
+        userServerInstalls: { listInstallsForUser: listInstalls, getInstall } as never
+      })
+      let stored: Record<string, unknown> = {}
+      let inserted = false
+      const insert = jest.fn(async (row) => {
+        stored = BSON.deserialize(BSON.serialize(row, { ignoreUndefined: false }))
+        inserted = true
+      })
+      Reflect.set(service, 'mcpDBClient', {
+        findOne: jest.fn(async () => inserted ? stored : null), insert, update: jest.fn()
+      })
+      const connect = jest.fn()
+      Reflect.set(service, 'connectToServer', connect)
+      const definition = await service.addServer({
+        name: 'mcp-execution', source: 'platform', transportType: 'streamable_http',
+        authMode: 'none', url: process.env.MSQ_EXECUTION_RESOURCE, enabled: true
+      })
+      expect(definition.toolsList).toHaveLength(19)
+      expect(stored.serviceHmacProfile).toBeNull()
+      for (const username of ['demo', 'second-user']) {
+        const visible = await service.getUserServer(username, 'mcp-execution')
+        expect(visible?.toolsList).toHaveLength(19)
+        expect(visible?.serviceHmacProfile).toBeUndefined()
+        expect(visible?.installed).toBe(true)
+        expect(visible?.authRequired).toBe(false)
+        const tools = await service.getUserServerTools(username, 'mcp-execution')
+        expect(tools).toHaveLength(19)
+        const catalog = await service.getUserTools(username)
+        expect(catalog).toEqual([{ 'mcp-execution': definition.toolsList }])
+      }
+      expect(connect).not.toHaveBeenCalled()
+      expect(getSecrets).not.toHaveBeenCalled()
+      expect(getInstall).not.toHaveBeenCalled()
+      const registered = Object.values(service.servers).find(server => server.name === 'mcp-execution')
+      expect(registered?.status).toBe('disconnected')
+      expect(registered?.connection).toBeUndefined()
+    } finally {
+      if (previous === undefined) delete process.env.MSQ_EXECUTION_RESOURCE
+      else process.env.MSQ_EXECUTION_RESOURCE = previous
+    }
   })
 
   test('invalid persisted state is rejected before secret migration or outbound work', async () => {

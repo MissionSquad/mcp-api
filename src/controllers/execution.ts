@@ -1,8 +1,10 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
+import { isIP } from 'node:net'
 import { Express, Request, Response } from 'express'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { MongoDBClient, MongoConnectionParams } from '../utils/mongodb'
+import { executionRequestTimeout } from '../utils/executionTimeout'
 
 export const RESERVED_EXECUTION_SERVER = 'mcp-execution'
 const digest = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -69,6 +71,7 @@ export function verifyInvocation(
   return timingSafeEqual(createHmac('sha256', key).update(signed).digest(), Buffer.from(sig, 'hex'))
 }
 export class ExecutionBridge {
+  private readonly requestTimeout: number
   private readonly nonces
   private readonly key
   private readonly target
@@ -76,10 +79,20 @@ export class ExecutionBridge {
     private readonly app: Express,
     mongo: MongoConnectionParams,
     readonly resource: string,
-    secret: string
+    secret: string,
+    options: { testMode?: boolean } = {}
   ) {
+    this.requestTimeout = executionRequestTimeout()
     this.key = Buffer.from(secret, 'base64')
     this.target = new URL(resource)
+    // Permit private cleartext transport only for explicit test deployments.
+    // Check the original literal as URL normalizes numeric aliases and octal IPs.
+    const literal = resource.match(/^http:\/\/(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?(?:\/|$)/)?.[1]
+    const octets = literal?.split('.').map(Number)
+    const privateTestHttp = options.testMode === true && literal === this.target.hostname &&
+      isIP(literal ?? '') === 4 && octets !== undefined &&
+      (octets[0] === 10 || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+        (octets[0] === 192 && octets[1] === 168))
     if (
       this.key.length !== 32 ||
       this.key.toString('base64') !== secret ||
@@ -88,7 +101,7 @@ export class ExecutionBridge {
       this.target.search ||
       this.target.hash ||
       (this.target.protocol !== 'https:' &&
-        !(this.target.protocol === 'http:' && ['127.0.0.1', '[::1]', 'localhost'].includes(this.target.hostname)))
+        !(this.target.protocol === 'http:' && (['127.0.0.1', '[::1]', 'localhost'].includes(this.target.hostname) || privateTestHttp)))
     )
       throw Error('Invalid execution bridge configuration')
     this.nonces = new MongoDBClient<{ _id: string; expiresAt: Date }>(mongo, [
@@ -124,7 +137,9 @@ export class ExecutionBridge {
       if (!res.writableEnded) controller.abort()
     }
     res.once('close', cancel)
-    const timer = setTimeout(() => controller.abort(), 30000)
+    const timeout = body.action === 'list' ? Math.min(30000, this.requestTimeout) : this.requestTimeout
+    const timer = setTimeout(() => controller.abort(), timeout)
+    const requestOptions = { timeout, maxTotalTimeout: timeout, signal: controller.signal }
     try {
       const transport = new StreamableHTTPClientTransport(this.target, {
         requestInit: { headers: { authorization: 'Bearer ' + bearer }, redirect: 'error' },
@@ -138,11 +153,11 @@ export class ExecutionBridge {
           })
         }
       })
-      await client.connect(transport)
+      await client.connect(transport, requestOptions)
       const value =
         body.action === 'list'
-          ? await client.listTools()
-          : await client.callTool({ name: body.name, arguments: body.args })
+          ? await client.listTools(undefined, requestOptions)
+          : await client.callTool({ name: body.name, arguments: body.args }, undefined, requestOptions)
       res.json({ success: true, data: value })
     } catch {
       if (!res.headersSent && !res.destroyed) res.status(502).json({ error: 'Execution service unavailable' })
