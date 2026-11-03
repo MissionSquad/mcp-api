@@ -675,16 +675,16 @@ describe('service-HMAC MCP service isolation', () => {
         name: 'mcp-execution', source: 'platform', transportType: 'streamable_http',
         authMode: 'none', url: process.env.MSQ_EXECUTION_RESOURCE, enabled: true
       })
-      expect(definition.toolsList).toHaveLength(18)
+      expect(definition.toolsList).toHaveLength(19)
       expect(stored.serviceHmacProfile).toBeNull()
       for (const username of ['demo', 'second-user']) {
         const visible = await service.getUserServer(username, 'mcp-execution')
-        expect(visible?.toolsList).toHaveLength(18)
+        expect(visible?.toolsList).toHaveLength(19)
         expect(visible?.serviceHmacProfile).toBeUndefined()
         expect(visible?.installed).toBe(true)
         expect(visible?.authRequired).toBe(false)
         const tools = await service.getUserServerTools(username, 'mcp-execution')
-        expect(tools).toHaveLength(18)
+        expect(tools).toHaveLength(19)
         const catalog = await service.getUserTools(username)
         expect(catalog).toEqual([{ 'mcp-execution': definition.toolsList }])
       }

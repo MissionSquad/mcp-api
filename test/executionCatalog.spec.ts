@@ -14,7 +14,7 @@ afterAll(() => {
 test('all-user execution catalog exposes canonical schemas without shared credentials or a connection', () => {
   const result = withExecutionCatalog(server)
   expect(result.toolsList).toEqual(contract.tools)
-  expect(result.toolsList).toHaveLength(18)
+  expect(result.toolsList).toHaveLength(19)
   expect(result.status).toBe('disconnected')
   expect(result.transportType).toBe('streamable_http')
   if (result.transportType === 'streamable_http') expect(result.headers).toBeUndefined()

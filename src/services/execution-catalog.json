@@ -1,8 +1,8 @@
 {
   "contractVersion": "1",
   "sourceRepository": "MissionSquad/mcp-execution",
-  "sourceRevision": "54ca9a8e5327b93cf70a1a97e1f31c8e22531e8c",
-  "sourceVersion": "0.1.3",
+  "sourceRevision": "439a2e9a3fd35ad3c9efd3754360b7a4952eb777",
+  "sourceVersion": "0.2.0",
   "tools": [
     {
       "name": "ee_profiles",
@@ -1284,6 +1284,60 @@
           "version",
           "idempotencyKey",
           "objectId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "ee_export_zip",
+      "description": "Export selected files and directories recursively from an active session as a downloadable ZIP artifact. Paths remain relative to the workspace. Limited to 50MiB; awaits completion.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "1"
+          },
+          "wait": {
+            "description": "Await the durable result by default for ordinary execution, files, settings, lifecycle and job/operation reads. Set false to return immediately. Background execution always returns immediately.",
+            "type": "boolean"
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "paths": {
+            "minItems": 1,
+            "maxItems": 256,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          },
+          "filename": {
+            "default": "workspace.zip",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._ -]*\\.zip$"
+          }
+        },
+        "required": [
+          "version",
+          "idempotencyKey",
+          "sessionId",
+          "paths"
         ],
         "additionalProperties": false
       }

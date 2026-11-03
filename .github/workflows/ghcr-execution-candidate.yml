@@ -1,7 +1,5 @@
 name: Publish execution GHCR candidate
 on:
-  push:
-    branches: [codex/execution-invocation]
   workflow_dispatch:
 permissions:
   contents: read
