@@ -36,3 +36,15 @@ test('catalog projection is restricted to exact configured platform registration
   delete process.env.MSQ_EXECUTION_RESOURCE
   expect(withExecutionCatalog(populated).toolsList).toBeUndefined()
 })
+
+test('advertises save once with durable workspace targeting and actionable output contracts', () => {
+  const tools = withExecutionCatalog(server).toolsList!
+  expect(tools.filter(tool => tool.name === 'ee_save')).toHaveLength(1)
+  expect(tools.some(tool => tool.name === 'ee_checkpoint')).toBe(false)
+  for (const name of ['ee_exec', 'ee_run_code', 'ee_files', 'ee_settings', 'ee_export_zip', 'ee_save', 'ee_close']) {
+    const tool = tools.find(tool => tool.name === name)!
+    // Action-specific schemas expose targets inside their oneOf branches.
+    expect(JSON.stringify(tool.inputSchema)).toContain('"workspaceId"')
+    expect(JSON.stringify(tool.inputSchema)).toContain('"sessionId"')
+  }
+})
