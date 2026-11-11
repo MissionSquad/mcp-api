@@ -14,7 +14,7 @@ afterEach(() => {
   if (original === undefined) delete process.env.MSQ_EXECUTION_REQUEST_TIMEOUT_MS
   else process.env.MSQ_EXECUTION_REQUEST_TIMEOUT_MS = original
 })
-async function run(action: 'list' | 'call', pending = false) {
+async function run(action: 'list' | 'call', pending = false, value: unknown = {}) {
   const resource = 'https://execution.example/mcp', key = Buffer.alloc(32, 9)
   const body: Invocation = { v: 1, timestamp: Date.now(), nonce: randomUUID(), resource, ownerId: 'owner', actorId: 'owner', runId: null, workspaceId: null, action, name: action === 'list' ? '' : 'ee_exec', args: {} }
   const bearer = 'ee1.' + 'a'.repeat(43)
@@ -22,7 +22,7 @@ async function run(action: 'list' | 'call', pending = false) {
   const signature = createHmac('sha256', key).update(JSON.stringify(['msq-execution-invocation-v1', body.timestamp, body.nonce, resource, body.ownerId, body.actorId, null, null, hash(bearer), action, body.name, hash('{}')])).digest('hex')
   const connect = jest.fn<(...args: unknown[]) => Promise<void>>().mockResolvedValue()
   const call = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockImplementation(async (...args) => {
-    if (!pending) return {}
+    if (!pending) return value
     const options = args[action === 'list' ? 1 : 2] as { signal: AbortSignal }
     return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(Error('cancelled')), { once: true }))
   })
@@ -70,4 +70,13 @@ test('overall deadline and disconnected caller cancel the SDK request and close 
     expect(result.close).toHaveBeenCalledTimes(1)
     expect(jest.getTimerCount()).toBe(0)
   }
+})
+
+test('bridge forwards actionable execution failures as normal model-visible tool results', async () => {
+  const receipt = { status: 'UNAVAILABLE', code: 'INVALID_ARGUMENTS', outcome: 'not_run', message: 'No file was read. Supply path and retry.', recovery: 'Use /workspace/report.txt.' }
+  const value = { content: [{ type: 'text', text: JSON.stringify(receipt) }], structuredContent: receipt, isError: true }
+  const result = await run('call', false, value)
+  await result.done
+  expect(result.res.json).toHaveBeenCalledWith({ success: true, data: value })
+  expect(result.res.status).not.toHaveBeenCalled()
 })
