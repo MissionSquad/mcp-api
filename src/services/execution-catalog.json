@@ -1,8 +1,8 @@
 {
   "contractVersion": "1",
   "sourceRepository": "MissionSquad/mcp-execution",
-  "sourceRevision": "c3e72f56135034f02fbaaac9c5f7e57d2dd7d8f0",
-  "sourceVersion": "0.4.6",
+  "sourceRevision": "29fbb0527daaf8661030115a1c77aa210ebd377d",
+  "sourceVersion": "0.5.0",
   "tools": [
     {
       "name": "ee_import",
@@ -181,10 +181,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -453,10 +460,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -779,10 +793,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -1071,10 +1092,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -1095,19 +1123,74 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "data": {
-            "type": "object",
-            "properties": {
-              "operationId": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 128,
-                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  }
+                },
+                "required": [
+                  "operationId"
+                ],
+                "additionalProperties": {}
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "workspaceId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "sessionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "state": {
+                    "type": "string",
+                    "const": "SUCCEEDED"
+                  },
+                  "sessionState": {
+                    "type": "string",
+                    "const": "CLOSED"
+                  },
+                  "alreadyClosed": {
+                    "type": "boolean",
+                    "const": true
+                  },
+                  "snapshotId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "workspaceId",
+                  "sessionId",
+                  "state",
+                  "sessionState",
+                  "alreadyClosed",
+                  "snapshotId"
+                ],
+                "additionalProperties": {}
               }
-            },
-            "required": [
-              "operationId"
-            ],
-            "additionalProperties": {}
+            ]
           }
         },
         "required": [
@@ -1351,10 +1434,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -1375,19 +1465,74 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "data": {
-            "type": "object",
-            "properties": {
-              "operationId": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 128,
-                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "operationId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  }
+                },
+                "required": [
+                  "operationId"
+                ],
+                "additionalProperties": {}
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "workspaceId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "sessionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "state": {
+                    "type": "string",
+                    "const": "SUCCEEDED"
+                  },
+                  "sessionState": {
+                    "type": "string",
+                    "const": "CLOSED"
+                  },
+                  "alreadyClosed": {
+                    "type": "boolean",
+                    "const": true
+                  },
+                  "snapshotId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "workspaceId",
+                  "sessionId",
+                  "state",
+                  "sessionState",
+                  "alreadyClosed",
+                  "snapshotId"
+                ],
+                "additionalProperties": {}
               }
-            },
-            "required": [
-              "operationId"
-            ],
-            "additionalProperties": {}
+            ]
           }
         },
         "required": [
@@ -1595,10 +1740,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -1890,10 +2042,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -2282,10 +2441,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -2610,10 +2776,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -3226,10 +3399,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -3574,10 +3754,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -3912,10 +4099,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -4204,10 +4398,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -4637,10 +4838,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -4889,10 +5097,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -5163,10 +5378,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -5419,10 +5641,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -5700,10 +5929,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
@@ -5994,10 +6230,17 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
           },
           "snapshotId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128,
-            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "objectId": {
             "type": "string",
