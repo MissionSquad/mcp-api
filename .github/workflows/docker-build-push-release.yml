@@ -98,11 +98,16 @@ jobs:
 
       # --- START: Steps for Google Cloud Artifact Registry ---
       - name: Authenticate to Google Cloud
-        id: gcp-auth # This step sets up gcloud with WIF
+        id: gcp-auth # This step authenticates with WIF
         uses: 'google-github-actions/auth@v2'
         with:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.GCP_SERVICE_ACCOUNT_EMAIL }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          version: ">= 363.0.0"
 
       - name: Get Access Token via gcloud
         id: gcloud_token_generation
