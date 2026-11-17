@@ -26,7 +26,7 @@ env:
 
 jobs:
   build-push-release:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, proxmox, docker, builder]
     permissions:
       contents: write
       packages: write

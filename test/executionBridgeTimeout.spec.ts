@@ -14,12 +14,13 @@ afterEach(() => {
   if (original === undefined) delete process.env.MSQ_EXECUTION_REQUEST_TIMEOUT_MS
   else process.env.MSQ_EXECUTION_REQUEST_TIMEOUT_MS = original
 })
-async function run(action: 'list' | 'call', pending = false, value: unknown = {}) {
+async function run(action: 'list' | 'call', pending = false, value: unknown = {}, results?: unknown[]) {
   const resource = 'https://execution.example/mcp', key = Buffer.alloc(32, 9)
   const body: Invocation = { v: 1, timestamp: Date.now(), nonce: randomUUID(), resource, ownerId: 'owner', actorId: 'owner', runId: null, workspaceId: null, action, name: action === 'list' ? '' : 'ee_exec', args: {} }
+  if (results) { body.v = 2; body.name = 'ee_process_results'; body.results = results }
   const bearer = 'ee1.' + 'a'.repeat(43)
   const hash = (text: string) => createHash('sha256').update(text).digest('hex')
-  const signature = createHmac('sha256', key).update(JSON.stringify(['msq-execution-invocation-v1', body.timestamp, body.nonce, resource, body.ownerId, body.actorId, null, null, hash(bearer), action, body.name, hash('{}')])).digest('hex')
+  const signature = createHmac('sha256', key).update(JSON.stringify([results ? 'msq-execution-invocation-v2' : 'msq-execution-invocation-v1', body.timestamp, body.nonce, resource, body.ownerId, body.actorId, null, null, hash(bearer), action, body.name, hash('{}'), ...(results ? [hash(JSON.stringify(results))] : [])])).digest('hex')
   const connect = jest.fn<(...args: unknown[]) => Promise<void>>().mockResolvedValue()
   const call = jest.fn<(...args: unknown[]) => Promise<unknown>>().mockImplementation(async (...args) => {
     if (!pending) return value
@@ -79,4 +80,12 @@ test('bridge forwards actionable execution failures as normal model-visible tool
   await result.done
   expect(result.res.json).toHaveBeenCalledWith({ success: true, data: value })
   expect(result.res.status).not.toHaveBeenCalled()
+})
+
+
+test('trusted result payloads use protocol metadata, never advertised tool arguments', async () => {
+  const results = [{ toolCallId: 'call-one', result: { rows: [1, 2] } }]
+  const response = await run('call', false, {}, results)
+  await response.done
+  expect(response.call.mock.calls[0][0]).toEqual({ name: 'ee_process_results', arguments: {}, _meta: { 'msq/tool-results': results } })
 })
