@@ -77,3 +77,20 @@ test('execution transport permits literal RFC1918 HTTP only in explicit test mod
   for (const url of ['https://execution.example/mcp', 'http://localhost:8080/mcp', 'http://127.0.0.1:8080/mcp', 'http://[::1]:8080/mcp'])
     expect(() => bridge(url)).not.toThrow()
 })
+
+test('result handoffs bind the exact payload and cannot be attached to v1 or another tool', () => {
+  const key = Buffer.alloc(32, 9), resource = 'https://ee.example/mcp', bearer = 'ee1.' + 'a'.repeat(43)
+  const hash = (v: string) => createHash('sha256').update(v).digest('hex')
+  const body: Invocation = { v: 2, timestamp: Date.now(), nonce: randomUUID(), resource,
+    ownerId: 'owner', actorId: 'owner', runId: null, workspaceId: null, action: 'call',
+    name: 'ee_process_results', args: { toolCallIds: ['call-one'] },
+    results: [{ toolCallId: 'call-one', serverName: 'data', toolName: 'list', status: 'success', contentType: 'application/json', result: { rows: [1, 2] } }] }
+  const signature = createHmac('sha256', key).update(JSON.stringify(['msq-execution-invocation-v2', body.timestamp,
+    body.nonce, resource, body.ownerId, body.actorId, body.runId, body.workspaceId, hash(bearer), body.action,
+    body.name, hash(JSON.stringify(body.args)), hash(JSON.stringify(body.results))])).digest('hex')
+  expect(verifyInvocation(body, bearer, signature, key, resource)).toBe(true)
+  for (const changed of [{ v: 1 as const }, { name: 'ee_exec' }, { action: 'list' as const },
+    { results: [] }, { results: undefined }, { results: [{ forged: true }] },
+    { results: ['x'.repeat(1048577)] }, { ownerId: 'other' }])
+    expect(verifyInvocation({ ...body, ...changed }, bearer, signature, key, resource)).toBe(false)
+})

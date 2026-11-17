@@ -10,7 +10,8 @@ export const RESERVED_EXECUTION_SERVER = 'mcp-execution'
 const digest = (text: string) => createHash('sha256').update(text).digest('hex')
 const identifier = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(v)
 export interface Invocation {
-  v: 1
+  v: 1 | 2
+  results?: unknown[]
   timestamp: number
   nonce: string
   resource: string
@@ -32,7 +33,7 @@ export function verifyInvocation(
 ): boolean {
   if (
     !body ||
-    body.v !== 1 ||
+    ![1, 2].includes(body.v) ||
     body.resource !== resource ||
     !Number.isSafeInteger(body.timestamp) ||
     Math.abs(now - body.timestamp) > 30000 ||
@@ -52,10 +53,14 @@ export function verifyInvocation(
     !/^[a-f0-9]{64}$/.test(sig)
   )
     return false
+  if (body.v === 1 && body.results !== undefined) return false
+  if (body.v === 2 && (body.action !== 'call' || body.name !== 'ee_process_results' ||
+      !Array.isArray(body.results) || body.results.length < 1 || body.results.length > 256 ||
+      Buffer.byteLength(JSON.stringify(body.results)) > 1048576)) return false
   const args = JSON.stringify(body.args)
   if (Buffer.byteLength(args) > 2 * 1048576) return false
   const signed = JSON.stringify([
-    'msq-execution-invocation-v1',
+    body.v === 2 ? 'msq-execution-invocation-v2' : 'msq-execution-invocation-v1',
     body.timestamp,
     body.nonce,
     resource,
@@ -66,7 +71,8 @@ export function verifyInvocation(
     digest(bearer),
     body.action,
     body.name,
-    digest(args)
+    digest(args),
+    ...(body.v === 2 ? [digest(JSON.stringify(body.results))] : [])
   ])
   return timingSafeEqual(createHmac('sha256', key).update(signed).digest(), Buffer.from(sig, 'hex'))
 }
@@ -157,7 +163,8 @@ export class ExecutionBridge {
       const value =
         body.action === 'list'
           ? await client.listTools(undefined, requestOptions)
-          : await client.callTool({ name: body.name, arguments: body.args }, undefined, requestOptions)
+          : await client.callTool({ name: body.name, arguments: body.args,
+              ...(body.v === 2 ? { _meta: { 'msq/tool-results': body.results } } : {}) }, undefined, requestOptions)
       res.json({ success: true, data: value })
     } catch {
       if (!res.headersSent && !res.destroyed) res.status(502).json({ error: 'Execution service unavailable' })
