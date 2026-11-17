@@ -15,6 +15,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify execution bridge contracts
+        run: |
+          corepack yarn install --frozen-lockfile
+          corepack yarn tsc --noEmit
+          corepack yarn jest --config jest.config.json --runInBand --coverage=false test/executionBridge.spec.ts test/executionBridgeTimeout.spec.ts
+
       - name: Get version from package.json
         id: package-version
         run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
